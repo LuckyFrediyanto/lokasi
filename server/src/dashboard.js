@@ -131,8 +131,23 @@ let devices = new Map();
 let places = [];
 let notifications = [];
 let trailLayer = null;
+let historyLayers = [];
+let historyState = null;
 let trailDeviceId = null;
 let toastTimer = null;
+
+function clock(ts) {
+  const d = new Date(ts);
+  return String(d.getHours()).padStart(2, "0") + ":" + String(d.getMinutes()).padStart(2, "0");
+}
+
+function durText(m) {
+  const mins = Math.max(1, Math.round(m || 1));
+  if (mins < 60) return mins + " menit";
+  const h = Math.floor(mins / 60);
+  const r = mins % 60;
+  return r > 0 ? h + "j " + r + "m" : h + " jam";
+}
 
 function esc(s) {
   return String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;" }[c]));
@@ -229,6 +244,23 @@ function removeDevice(deviceId) {
 
 function renderDevices() {
   const list = document.getElementById("deviceList");
+  if (historyState) {
+    const segs = historyState.data.segments || [];
+    const header = '<div class="dev"><div class="dev-top"><span class="dev-name">History · ' + esc(historyState.label) + '</span>' +
+      '<button class="sec" type="button" onclick="closeHistory()">Tutup</button></div>' +
+      '<div class="meta">Total perjalanan: <strong>' + historyState.data.total_distance_km + ' km</strong></div>' +
+      '<div class="dev-btns">' +
+      [1, 3, 7].map((d) => '<button type="button" class="' + (historyState.days === d ? "" : "sec") + '" onclick="openHistory(\\'' + esc(historyState.id) + '\\',' + d + ')">' + (d === 1 ? "24 Jam" : d + " Hari") + '</button>').join("") +
+      '</div></div>';
+    const body = !segs.length
+      ? '<div class="meta">Belum ada rekaman perjalanan.</div>'
+      : segs.map((s) => s.type === "stay"
+        ? '<div class="dev" style="cursor:pointer" onclick="map.setView([' + s.lat + ',' + s.lng + '],17)"><div class="dev-top"><span class="dev-name">' + esc(s.label) + '</span><span class="badge">SINGGAH</span></div><div class="meta">' + clock(s.start_at) + " – " + clock(s.end_at) + " · " + durText(s.duration_min) + '</div></div>'
+        : '<div class="dev" style="border-color:#22c55e;background:#0f2419;cursor:pointer" onclick="map.setView([' + s.end_lat + ',' + s.end_lng + '],16)"><div class="dev-top"><span class="dev-name" style="color:#4ade80">Jalan · ' + s.distance_km + ' km</span><span class="badge android">' + durText(s.duration_min) + '</span></div><div class="meta">' + clock(s.start_at) + " – " + clock(s.end_at) + '<br>Dari: ' + esc(s.from_label) + '<br>Ke: ' + esc(s.to_label) + '</div></div>'
+      ).join("");
+    list.innerHTML = header + body;
+    return;
+  }
   const arr = Array.from(devices.values()).sort((a, b) => b.updated_at - a.updated_at);
   if (!arr.length) {
     list.innerHTML = '<div class="meta">Belum ada perangkat Android/iOS aktif. Mode Web hanya untuk memantau.</div>';
@@ -246,9 +278,9 @@ function renderDevices() {
       (online ? "● Online" : "○ Offline") + " · " + ago(d.updated_at) + " · Baterai " + bat + " · Akurasi " + acc + '</div>' +
       '<div class="dev-btns">' +
       '<button type="button" onclick="focusDev(\\'' + esc(d.device_id) + '\\')">Fokus</button>' +
-      '<button class="sec" type="button" onclick="toggleTrail(\\'' + esc(d.device_id) + '\\')">Jejak</button>' +
       '<button class="sec" type="button" onclick="openRoute(' + d.lat + ',' + d.lng + ')">Rute</button>' +
       '<button class="sec" type="button" onclick="pingDev(\\'' + esc(d.device_id) + '\\')">Bunyikan</button>' +
+      '<button style="background:#22c55e;color:#0b1220" type="button" onclick="openHistory(\\'' + esc(d.device_id) + '\\',1)">History</button>' +
       '</div></div>';
   }).join("");
 }
@@ -271,14 +303,27 @@ window.focusDev = (id) => {
 window.openRoute = (lat, lng) => {
   window.open("https://www.google.com/maps/dir/?api=1&destination=" + lat + "," + lng, "_blank");
 };
-window.toggleTrail = async (id) => {
-  if (trailLayer) { map.removeLayer(trailLayer); trailLayer = null; }
-  if (trailDeviceId === id) { trailDeviceId = null; return; }
-  trailDeviceId = id;
-  const data = await api("/api/locations/" + encodeURIComponent(id) + "/history");
-  if (!data.points.length) return;
-  trailLayer = L.polyline(data.points.map((p) => [p.lat, p.lng]), { color: "#38bdf8", weight: 4 }).addTo(map);
-  map.fitBounds(trailLayer.getBounds(), { padding: [30, 30] });
+window.closeHistory = () => {
+  historyLayers.forEach((l) => map.removeLayer(l));
+  historyLayers = [];
+  historyState = null;
+  renderDevices();
+};
+window.openHistory = async (id, days = 1) => {
+  historyLayers.forEach((l) => map.removeLayer(l));
+  historyLayers = [];
+  const d = devices.get(id);
+  const data = await api("/api/locations/" + encodeURIComponent(id) + "/history?days=" + days);
+  historyState = { id, days, label: d ? (d.display_name || d.username) : id, data };
+  const latlngs = (data.points || []).map((p) => [p.lat, p.lng]);
+  if (latlngs.length >= 2) {
+    historyLayers.push(
+      L.polyline(latlngs, { color: "#14532d", weight: 9, opacity: 0.75 }).addTo(map),
+      L.polyline(latlngs, { color: "#22c55e", weight: 5, opacity: 0.98 }).addTo(map)
+    );
+    map.fitBounds(latlngs, { padding: [36, 36] });
+  }
+  renderDevices();
 };
 window.pingDev = async (id) => {
   await api("/api/locations/" + encodeURIComponent(id) + "/ping", { method: "POST" });

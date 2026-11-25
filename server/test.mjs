@@ -33,7 +33,9 @@ function req(path, { method = "GET", token = null, body = null } = {}) {
 }
 
 const events = [];
-const hub = new LocationHubCore(createSqlAdapter(), (e) => events.push(e));
+const hub = new LocationHubCore(createSqlAdapter(), (e) => events.push(e), {
+  reverseGeocodeFn: async (lat) => (lat < -6.805 ? "Jl. Jenderal Sudirman, Kudus" : "Jl. Pemuda, Kudus"),
+});
 
 let res = await hub.handleApi(req("/api/health"));
 assert.equal(res.status, 200);
@@ -197,4 +199,60 @@ res = await hub.handleApi(req(`/api/places/${rumah.id}`, {
 }));
 assert.equal(res.status, 200);
 
-console.log("ALL_V2_TESTS_PASSED");
+res = await hub.handleApi(req("/api/auth/login", {
+  method: "POST",
+  body: { username: "lucky", password: "bebas" },
+}));
+const luckyAuth2 = await res.json();
+const baseT = Date.now() - 3600000;
+const pts = [
+  { lat: -6.8000, lng: 110.8400, timestamp: baseT },
+  { lat: -6.80005, lng: 110.84005, timestamp: baseT + 10 * 60000 },
+  { lat: -6.8030, lng: 110.8430, timestamp: baseT + 15 * 60000 },
+  { lat: -6.8070, lng: 110.8470, timestamp: baseT + 20 * 60000 },
+  { lat: -6.8100, lng: 110.8500, timestamp: baseT + 25 * 60000 },
+  { lat: -6.81002, lng: 110.85002, timestamp: baseT + 40 * 60000 },
+];
+for (const pt of pts) {
+  res = await hub.handleApi(req("/api/location", {
+    method: "POST",
+    token: luckyAuth2.token,
+    body: { device_id: "tripdev", platform: "android", device_name: "Poco", ...pt },
+  }));
+  assert.equal(res.status, 200);
+}
+
+res = await hub.handleApi(req("/api/locations/lucky%3Atripdev/history?days=1", {
+  token: adminAuth.token,
+}));
+assert.equal(res.status, 200);
+const hist = await res.json();
+assert.ok(hist.total_distance_km > 1.0, `Expected >1km, got ${hist.total_distance_km}`);
+assert.equal(hist.segments.length, 3);
+assert.equal(hist.segments[0].type, "stay");
+assert.equal(hist.segments[0].label, "Jl. Pemuda, Kudus");
+assert.equal(hist.segments[1].type, "trip");
+assert.equal(hist.segments[1].from_label, "Jl. Pemuda, Kudus");
+assert.equal(hist.segments[1].to_label, "Kantor");
+assert.ok(hist.segments[1].distance_km > 1.0);
+assert.equal(hist.segments[2].type, "stay");
+assert.equal(hist.segments[2].label, "Kantor");
+
+res = await hub.handleApi(req("/api/admin/logout-all", {
+  method: "POST",
+  token: adminAuth.token,
+}));
+assert.equal(res.status, 200);
+
+res = await hub.handleApi(req("/api/auth/me", { token: adminAuth.token }));
+assert.equal(res.status, 401);
+
+res = await hub.handleApi(req("/api/auth/login", {
+  method: "POST",
+  body: { username: "bos", password: "barupassword" },
+}));
+const freshAdmin = await res.json();
+res = await hub.handleApi(req("/api/locations", { token: freshAdmin.token }));
+assert.equal((await res.json()).devices.length, 0);
+
+console.log("ALL_V3_TESTS_PASSED");

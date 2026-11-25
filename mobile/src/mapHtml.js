@@ -26,6 +26,11 @@ export const MAP_HTML = `<!doctype html>
     border-radius:999px; padding:4px 10px; font:700 11px/1.2 -apple-system,sans-serif;
     white-space:nowrap; box-shadow:0 3px 10px rgba(0,0,0,.55);
   }
+  .stop-pin {
+    background:#14532d; color:#dcfce7; border:2px solid #22c55e;
+    border-radius:999px; padding:2px 8px; font:700 11px/1.2 -apple-system,sans-serif;
+    white-space:nowrap; box-shadow:0 2px 8px rgba(0,0,0,.5);
+  }
 </style>
 </head>
 <body>
@@ -40,7 +45,8 @@ L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
 
 const markers = new Map();
 let placeLayers = [];
-let trail = null;
+let historyLayers = [];
+let highlightLayer = null;
 let didAutoCenter = false;
 let pickActive = false;
 let pickMarker = null;
@@ -163,14 +169,43 @@ window.focusDevice = function(lat, lng) {
   map.setView([lat, lng], 17, { animate: true });
 };
 
-window.setTrail = function(points) {
-  if (trail) {
-    map.removeLayer(trail);
-    trail = null;
-  }
+window.setHistoryRoute = function(points, segments) {
+  historyLayers.forEach((l) => map.removeLayer(l));
+  historyLayers = [];
+  if (highlightLayer) { map.removeLayer(highlightLayer); highlightLayer = null; }
   if (!points || !points.length) return;
-  trail = L.polyline(points.map((p) => [p.lat, p.lng]), { color: "#38bdf8", weight: 4 }).addTo(map);
-  map.fitBounds(trail.getBounds(), { padding: [35, 35] });
+  const latlngs = points.map((p) => [p.lat, p.lng]);
+  if (latlngs.length >= 2) {
+    const border = L.polyline(latlngs, { color: "#14532d", weight: 9, opacity: 0.75, lineJoin: "round", lineCap: "round" }).addTo(map);
+    const greenLine = L.polyline(latlngs, { color: "#22c55e", weight: 5, opacity: 0.98, lineJoin: "round", lineCap: "round" }).addTo(map);
+    historyLayers.push(border, greenLine);
+  }
+  const stays = (segments || []).filter((s) => s.type === "stay");
+  stays.forEach((s, idx) => {
+    const m = L.marker([s.lat, s.lng], {
+      icon: L.divIcon({
+        className: "",
+        html: '<div class="stop-pin">' + (idx + 1) + '. ' + esc(s.label) + '</div>',
+        iconAnchor: [35, 12]
+      })
+    }).addTo(map);
+    historyLayers.push(m);
+  });
+  if (latlngs.length === 1) {
+    map.setView(latlngs[0], 16);
+  } else {
+    map.fitBounds(latlngs, { padding: [36, 36] });
+  }
+};
+
+window.highlightSegment = function(lat, lng, tripPoints) {
+  if (highlightLayer) { map.removeLayer(highlightLayer); highlightLayer = null; }
+  if (Array.isArray(tripPoints) && tripPoints.length >= 2) {
+    highlightLayer = L.polyline(tripPoints, { color: "#86efac", weight: 7, opacity: 1 }).addTo(map);
+    map.fitBounds(highlightLayer.getBounds(), { padding: [40, 40] });
+  } else if (typeof lat === "number" && typeof lng === "number") {
+    map.setView([lat, lng], 17, { animate: true });
+  }
 };
 </script>
 </body>

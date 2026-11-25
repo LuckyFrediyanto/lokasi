@@ -1,6 +1,8 @@
 const SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000;
-const HISTORY_LIMIT = 200;
-const HISTORY_MAX_AGE_MS = 24 * 60 * 60 * 1000;
+const HISTORY_LIMIT = 2000;
+const HISTORY_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
+const STAY_RADIUS_M = 60;
+const STAY_MIN_MS = 3 * 60 * 1000;
 const NOTIF_LIMIT = 50;
 const ONLINE_WINDOW_MS = 90 * 1000;
 const PBKDF2_ITERATIONS = 100000;
@@ -136,10 +138,55 @@ export function json(data, status = 200) {
   });
 }
 
+async function defaultReverseGeocode(lat, lng) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 3500);
+  try {
+    const url = `https://nominatim.openstreetmap.org/reverse?format=jsonv2&lat=${lat.toFixed(6)}&lon=${lng.toFixed(6)}&zoom=18&addressdetails=1&accept-language=id`;
+    const res = await fetch(url, {
+      signal: controller.signal,
+      headers: { "user-agent": "LacakHP/1.1 (personal-location-tracker)" },
+    });
+    if (!res.ok) return null;
+    const data = await res.json();
+    const addr = data?.address || {};
+    const primary =
+      data?.name ||
+      addr.amenity ||
+      addr.building ||
+      addr.shop ||
+      addr.road ||
+      addr.pedestrian ||
+      addr.neighbourhood ||
+      addr.suburb ||
+      addr.village;
+    const area =
+      addr.suburb ||
+      addr.village ||
+      addr.town ||
+      addr.city ||
+      addr.county ||
+      addr.state;
+    if (primary && area && primary.toLowerCase() !== area.toLowerCase()) {
+      return `${primary}, ${area}`.slice(0, 80);
+    }
+    if (primary) return String(primary).slice(0, 80);
+    if (typeof data?.display_name === "string" && data.display_name.trim()) {
+      return data.display_name.split(",").slice(0, 2).join(",").trim().slice(0, 80);
+    }
+    return null;
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 export class LocationHubCore {
-  constructor(sql, broadcastFn = () => {}) {
+  constructor(sql, broadcastFn = () => {}, options = {}) {
     this.sql = sql;
     this.broadcast = broadcastFn;
+    this.reverseGeocodeFn = options.reverseGeocodeFn || defaultReverseGeocode;
     this.loginAttempts = new Map();
     this.initSchema();
   }
@@ -218,6 +265,11 @@ export class LocationHubCore {
         created_at INTEGER NOT NULL
       );
       CREATE INDEX IF NOT EXISTS idx_notifications_time ON notifications(created_at DESC);
+      CREATE TABLE IF NOT EXISTS geocode_cache (
+        grid_key TEXT PRIMARY KEY,
+        label TEXT NOT NULL,
+        updated_at INTEGER NOT NULL
+      );
     `);
 
     const userCols = new Set(
@@ -606,20 +658,31 @@ export class LocationHubCore {
       accuracy, altitude, speed, heading, battery, charging, updatedAt, now, user.token
     );
 
-    this.sql.exec(
-      `INSERT INTO location_history (device_id, username, lat, lng, accuracy, battery, recorded_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?)`,
-      deviceId, user.username, lat, lng, accuracy, battery, updatedAt
-    );
+    const lastHist = this.sql.exec(
+      `SELECT lat, lng, recorded_at FROM location_history
+       WHERE device_id = ? ORDER BY recorded_at DESC LIMIT 1`,
+      deviceId
+    ).toArray()[0];
+    const shouldAppendHistory =
+      !lastHist ||
+      updatedAt - Number(lastHist.recorded_at) >= 60000 ||
+      haversineMeters(Number(lastHist.lat), Number(lastHist.lng), lat, lng) >= 8;
 
-    this.sql.exec(
-      `DELETE FROM location_history
-       WHERE device_id = ?
-         AND (recorded_at < ? OR id NOT IN (
-           SELECT id FROM location_history WHERE device_id = ? ORDER BY recorded_at DESC LIMIT ?
-         ))`,
-      deviceId, now - HISTORY_MAX_AGE_MS, deviceId, HISTORY_LIMIT
-    );
+    if (shouldAppendHistory) {
+      this.sql.exec(
+        `INSERT INTO location_history (device_id, username, lat, lng, accuracy, battery, recorded_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?)`,
+        deviceId, user.username, lat, lng, accuracy, battery, updatedAt
+      );
+      this.sql.exec(
+        `DELETE FROM location_history
+         WHERE device_id = ?
+           AND (recorded_at < ? OR id NOT IN (
+             SELECT id FROM location_history WHERE device_id = ? ORDER BY recorded_at DESC LIMIT ?
+           ))`,
+        deviceId, now - HISTORY_MAX_AGE_MS, deviceId, HISTORY_LIMIT
+      );
+    }
 
     const device = {
       device_id: deviceId,
@@ -644,6 +707,189 @@ export class LocationHubCore {
     device.current_place = this.evaluateGeofences(device);
     this.broadcast({ type: "location", device });
     return { device, status: 200 };
+  }
+
+  async resolvePlaceLabel(lat, lng, places, remoteBudget) {
+    let bestPlace = null;
+    let bestDist = Infinity;
+    for (const p of places) {
+      const dist = haversineMeters(lat, lng, p.lat, p.lng);
+      if (dist <= Math.max(p.radius, 60) && dist < bestDist) {
+        bestPlace = p;
+        bestDist = dist;
+      }
+    }
+    if (bestPlace) return bestPlace.name;
+
+    const key = `${lat.toFixed(4)},${lng.toFixed(4)}`;
+    const cached = this.sql.exec(
+      "SELECT label FROM geocode_cache WHERE grid_key = ?",
+      key
+    ).toArray()[0];
+    if (cached && cached.label) return cached.label;
+
+    if (remoteBudget.remaining > 0) {
+      remoteBudget.remaining -= 1;
+      const fetched = await this.reverseGeocodeFn(lat, lng);
+      if (fetched) {
+        this.sql.exec(
+          `INSERT INTO geocode_cache (grid_key, label, updated_at)
+           VALUES (?, ?, ?)
+           ON CONFLICT(grid_key) DO UPDATE SET label = excluded.label, updated_at = excluded.updated_at`,
+          key,
+          fetched,
+          Date.now()
+        );
+        return fetched;
+      }
+    }
+    return `${lat.toFixed(5)}, ${lng.toFixed(5)}`;
+  }
+
+  async buildTravelHistory(deviceId, days = 1) {
+    const clampedDays = Math.min(7, Math.max(1, Number(days) || 1));
+    const since = Date.now() - clampedDays * 24 * 60 * 60 * 1000;
+    const rawRows = this.sql.exec(
+      `SELECT lat, lng, accuracy, battery, recorded_at
+       FROM location_history
+       WHERE device_id = ? AND recorded_at >= ?
+       ORDER BY recorded_at ASC`,
+      deviceId,
+      since
+    ).toArray();
+
+    const points = [];
+    for (const r of rawRows) {
+      const pt = {
+        lat: Number(r.lat),
+        lng: Number(r.lng),
+        accuracy: r.accuracy != null ? Number(r.accuracy) : null,
+        battery: r.battery != null ? Number(r.battery) : null,
+        recorded_at: Number(r.recorded_at),
+      };
+      if (points.length > 0) {
+        const prev = points[points.length - 1];
+        const dtSec = (pt.recorded_at - prev.recorded_at) / 1000;
+        const dist = haversineMeters(prev.lat, prev.lng, pt.lat, pt.lng);
+        if (dtSec > 0 && dist / dtSec > 70 && dist > 300) continue;
+      }
+      points.push(pt);
+    }
+
+    if (!points.length) {
+      return { device_id: deviceId, days: clampedDays, total_distance_km: 0, points: [], segments: [] };
+    }
+
+    const places = this.listPlaces();
+    const rawSegs = [];
+    let i = 0;
+
+    while (i < points.length) {
+      let j = i + 1;
+      while (j < points.length) {
+        const d = haversineMeters(points[i].lat, points[i].lng, points[j].lat, points[j].lng);
+        if (d > STAY_RADIUS_M) break;
+        j++;
+      }
+      const stayEnd = j - 1;
+      const stayDur = points[stayEnd].recorded_at - points[i].recorded_at;
+      if (stayDur >= STAY_MIN_MS || points.length === 1) {
+        let sumLat = 0;
+        let sumLng = 0;
+        const count = stayEnd - i + 1;
+        for (let k = i; k <= stayEnd; k++) {
+          sumLat += points[k].lat;
+          sumLng += points[k].lng;
+        }
+        rawSegs.push({
+          type: "stay",
+          start_at: points[i].recorded_at,
+          end_at: points[stayEnd].recorded_at,
+          lat: sumLat / count,
+          lng: sumLng / count,
+        });
+        i = j;
+        continue;
+      }
+
+      const tripStart = i > 0 ? i - 1 : i;
+      let k = j;
+      while (k < points.length) {
+        let m = k + 1;
+        while (m < points.length) {
+          if (haversineMeters(points[k].lat, points[k].lng, points[m].lat, points[m].lng) > STAY_RADIUS_M) break;
+          m++;
+        }
+        if (points[m - 1].recorded_at - points[k].recorded_at >= STAY_MIN_MS) {
+          break;
+        }
+        k = m;
+      }
+      const tripEnd = Math.min(k, points.length - 1);
+      const slice = points.slice(tripStart, tripEnd + 1);
+      let distM = 0;
+      for (let s = 1; s < slice.length; s++) {
+        distM += haversineMeters(slice[s - 1].lat, slice[s - 1].lng, slice[s].lat, slice[s].lng);
+      }
+      rawSegs.push({
+        type: "trip",
+        start_at: slice[0].recorded_at,
+        end_at: slice[slice.length - 1].recorded_at,
+        distance_km: Number((distM / 1000).toFixed(2)),
+        start_lat: slice[0].lat,
+        start_lng: slice[0].lng,
+        end_lat: slice[slice.length - 1].lat,
+        end_lng: slice[slice.length - 1].lng,
+        points: slice.map((p) => [p.lat, p.lng]),
+      });
+      i = k < points.length ? k : points.length;
+    }
+
+    const remoteBudget = { remaining: 8 };
+    const segments = [];
+    let totalKm = 0;
+
+    for (const seg of rawSegs) {
+      const durationMin = Math.max(1, Math.round((seg.end_at - seg.start_at) / 60000));
+      if (seg.type === "stay") {
+        const label = await this.resolvePlaceLabel(seg.lat, seg.lng, places, remoteBudget);
+        segments.push({
+          type: "stay",
+          start_at: seg.start_at,
+          end_at: seg.end_at,
+          duration_min: durationMin,
+          lat: seg.lat,
+          lng: seg.lng,
+          label,
+        });
+      } else {
+        totalKm += seg.distance_km;
+        const fromLabel = await this.resolvePlaceLabel(seg.start_lat, seg.start_lng, places, remoteBudget);
+        const toLabel = await this.resolvePlaceLabel(seg.end_lat, seg.end_lng, places, remoteBudget);
+        segments.push({
+          type: "trip",
+          start_at: seg.start_at,
+          end_at: seg.end_at,
+          duration_min: durationMin,
+          distance_km: seg.distance_km,
+          from_label: fromLabel,
+          to_label: toLabel,
+          start_lat: seg.start_lat,
+          start_lng: seg.start_lng,
+          end_lat: seg.end_lat,
+          end_lng: seg.end_lng,
+          points: seg.points,
+        });
+      }
+    }
+
+    return {
+      device_id: deviceId,
+      days: clampedDays,
+      total_distance_km: Number(totalKm.toFixed(2)),
+      points,
+      segments,
+    };
   }
 
   async readJson(request) {
@@ -781,17 +1027,26 @@ export class LocationHubCore {
       return json({ devices: this.listLocations() });
     }
 
+    if (path === "/api/admin/logout-all" && request.method === "POST") {
+      if (user.role !== "admin") return json({ error: "Khusus admin" }, 403);
+      this.sql.exec("DELETE FROM sessions");
+      this.sql.exec("DELETE FROM locations");
+      this.sql.exec("DELETE FROM device_place_state");
+      this.broadcast({
+        type: "snapshot",
+        devices: [],
+        places: this.listPlaces(),
+        notifications: this.listNotifications(),
+      });
+      return json({ ok: true, cleared: true });
+    }
+
     const historyMatch = path.match(/^\/api\/locations\/([^/]+)\/history$/);
     if (historyMatch && request.method === "GET") {
       const deviceId = decodeURIComponent(historyMatch[1]);
-      const rows = this.sql.exec(
-        `SELECT lat, lng, accuracy, battery, recorded_at
-         FROM location_history
-         WHERE device_id = ?
-         ORDER BY recorded_at ASC`,
-        deviceId
-      ).toArray();
-      return json({ device_id: deviceId, points: rows });
+      const days = Number(url.searchParams.get("days") || 1);
+      const history = await this.buildTravelHistory(deviceId, days);
+      return json(history);
     }
 
     const pingMatch = path.match(/^\/api\/locations\/([^/]+)\/ping$/);

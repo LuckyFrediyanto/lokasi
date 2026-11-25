@@ -59,6 +59,21 @@ function formatAgo(ts) {
   return `${Math.floor(hr / 24)}h lalu`;
 }
 
+function formatClock(ts) {
+  const d = new Date(ts);
+  const hh = String(d.getHours()).padStart(2, "0");
+  const mm = String(d.getMinutes()).padStart(2, "0");
+  return `${hh}:${mm}`;
+}
+
+function formatDuration(mins) {
+  const m = Math.max(1, Math.round(mins || 1));
+  if (m < 60) return `${m} menit`;
+  const h = Math.floor(m / 60);
+  const rem = m % 60;
+  return rem > 0 ? `${h}j ${rem}m` : `${h} jam`;
+}
+
 async function setupNotifications() {
   try {
     if (Platform.OS === "android") {
@@ -112,7 +127,10 @@ function AppInner() {
   const [unreadNotifs, setUnreadNotifs] = useState(0);
   const [toastMsg, setToastMsg] = useState("");
 
-  const [trailId, setTrailId] = useState(null);
+  const [historyTarget, setHistoryTarget] = useState(null);
+  const [historyDays, setHistoryDays] = useState(1);
+  const [historyData, setHistoryData] = useState(null);
+  const [historyLoading, setHistoryLoading] = useState(false);
   const [mapReady, setMapReady] = useState(false);
   const [tick, setTick] = useState(0);
 
@@ -388,6 +406,8 @@ function AppInner() {
     await clearSession();
     setBgActive(false);
     setPlaceMode(false);
+    setHistoryTarget(null);
+    setHistoryData(null);
     setToken(null);
     setUser(null);
     setDevices([]);
@@ -422,18 +442,41 @@ function AppInner() {
     }
   }
 
-  async function toggleTrail(deviceId) {
-    if (trailId === deviceId) {
-      setTrailId(null);
-      webRef.current?.injectJavaScript("window.setTrail([]); true;");
-      return;
-    }
+  async function openHistory(device, days = 1) {
+    setPlaceMode(false);
+    setHistoryTarget(device);
+    setHistoryDays(days);
+    setHistoryLoading(true);
     try {
-      const data = await apiRequest(`/api/locations/${encodeURIComponent(deviceId)}/history`, { token });
-      setTrailId(deviceId);
-      webRef.current?.injectJavaScript(`window.setTrail(${JSON.stringify(data.points || [])}); true;`);
+      const data = await apiRequest(
+        `/api/locations/${encodeURIComponent(device.device_id)}/history?days=${days}`,
+        { token }
+      );
+      setHistoryData(data);
+      webRef.current?.injectJavaScript(
+        `window.setHistoryRoute(${JSON.stringify(data.points || [])}, ${JSON.stringify(data.segments || [])}); true;`
+      );
     } catch (e) {
-      Alert.alert("Riwayat", e.message);
+      Alert.alert("History", e.message || "Gagal memuat riwayat");
+    } finally {
+      setHistoryLoading(false);
+    }
+  }
+
+  function closeHistory() {
+    setHistoryTarget(null);
+    setHistoryData(null);
+    webRef.current?.injectJavaScript("window.setHistoryRoute([], []); true;");
+  }
+
+  function focusHistorySegment(seg) {
+    if (!webRef.current) return;
+    if (seg.type === "trip" && Array.isArray(seg.points)) {
+      webRef.current.injectJavaScript(
+        `window.highlightSegment(null, null, ${JSON.stringify(seg.points)}); true;`
+      );
+    } else if (typeof seg.lat === "number" && typeof seg.lng === "number") {
+      webRef.current.injectJavaScript(`window.highlightSegment(${seg.lat}, ${seg.lng}, null); true;`);
     }
   }
 
@@ -457,6 +500,7 @@ function AppInner() {
   }
 
   async function openCreatePlace() {
+    closeHistory();
     setPlaceErr("");
     setEditingPlaceId(null);
     setPlaceName("");
@@ -860,6 +904,85 @@ function AppInner() {
             </View>
           ) : null}
         </ScrollView>
+      ) : historyTarget ? (
+        <ScrollView style={styles.list} contentContainerStyle={{ padding: 12, gap: 8 }}>
+          <View style={styles.devCard}>
+            <View style={styles.devHead}>
+              <View style={{ flex: 1 }}>
+                <Text style={styles.title}>
+                  History · {historyTarget.display_name || historyTarget.username}
+                </Text>
+                <Text style={styles.devMeta}>
+                  Total perjalanan: {historyData ? `${historyData.total_distance_km} km` : "..."}
+                </Text>
+              </View>
+              <TouchableOpacity style={styles.btnSmall} onPress={closeHistory}>
+                <Text style={styles.btnSmallText}>Tutup</Text>
+              </TouchableOpacity>
+            </View>
+            <View style={styles.devActions}>
+              {[1, 3, 7].map((d) => (
+                <TouchableOpacity
+                  key={d}
+                  style={historyDays === d ? styles.chipGreen : styles.chip}
+                  onPress={() => openHistory(historyTarget, d)}
+                >
+                  <Text style={historyDays === d ? styles.chipPrimaryText : styles.chipText}>
+                    {d === 1 ? "24 Jam" : `${d} Hari`}
+                  </Text>
+                </TouchableOpacity>
+              ))}
+            </View>
+          </View>
+
+          {historyLoading ? (
+            <Text style={styles.muted}>Memuat riwayat perjalanan...</Text>
+          ) : !historyData || !historyData.segments || historyData.segments.length === 0 ? (
+            <Text style={styles.muted}>Belum ada rekaman perjalanan pada rentang waktu ini.</Text>
+          ) : (
+            historyData.segments.map((seg, idx) => (
+              <TouchableOpacity
+                key={`${seg.type}-${seg.start_at}-${idx}`}
+                style={[styles.devCard, seg.type === "trip" && styles.tripCard]}
+                onPress={() => focusHistorySegment(seg)}
+              >
+                {seg.type === "stay" ? (
+                  <>
+                    <View style={styles.devHead}>
+                      <Text style={styles.devName}>{seg.label}</Text>
+                      <View style={styles.badgeStay}>
+                        <Text style={styles.badgeText}>SINGGAH</Text>
+                      </View>
+                    </View>
+                    <Text style={styles.devMeta}>
+                      {formatClock(seg.start_at)} – {formatClock(seg.end_at)} · {formatDuration(seg.duration_min)}
+                    </Text>
+                  </>
+                ) : (
+                  <>
+                    <View style={styles.devHead}>
+                      <Text style={styles.tripTitle}>
+                        Jalan · {seg.distance_km} km
+                      </Text>
+                      <View style={styles.badgeTrip}>
+                        <Text style={styles.badgeText}>{formatDuration(seg.duration_min)}</Text>
+                      </View>
+                    </View>
+                    <Text style={styles.devMeta}>
+                      {formatClock(seg.start_at)} – {formatClock(seg.end_at)}
+                    </Text>
+                    <Text style={styles.tripRoute}>
+                      Dari: {seg.from_label}
+                    </Text>
+                    <Text style={styles.tripRoute}>
+                      Ke: {seg.to_label}
+                    </Text>
+                  </>
+                )}
+              </TouchableOpacity>
+            ))
+          )}
+        </ScrollView>
       ) : (
         <ScrollView style={styles.list} contentContainerStyle={{ padding: 12, gap: 10 }}>
           {devices.length === 0 ? (
@@ -891,14 +1014,14 @@ function AppInner() {
                     <TouchableOpacity style={styles.chipPrimary} onPress={() => focusDevice(d)}>
                       <Text style={styles.chipPrimaryText}>Fokus</Text>
                     </TouchableOpacity>
-                    <TouchableOpacity style={styles.chip} onPress={() => toggleTrail(d.device_id)}>
-                      <Text style={styles.chipText}>{trailId === d.device_id ? "Tutup Jejak" : "Jejak"}</Text>
-                    </TouchableOpacity>
                     <TouchableOpacity style={styles.chip} onPress={() => openRoute(d)}>
                       <Text style={styles.chipText}>Rute</Text>
                     </TouchableOpacity>
                     <TouchableOpacity style={styles.chip} onPress={() => pingDevice(d.device_id)}>
                       <Text style={styles.chipText}>Bunyikan</Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity style={styles.chipGreen} onPress={() => openHistory(d, 1)}>
+                      <Text style={styles.chipPrimaryText}>History</Text>
                     </TouchableOpacity>
                   </View>
                 </View>
@@ -1110,9 +1233,15 @@ const styles = StyleSheet.create({
   badgeText: { color: "#fff", fontSize: 10, fontWeight: "700" },
   devActions: { flexDirection: "row", flexWrap: "wrap", gap: 6, marginTop: 8 },
   chipPrimary: { backgroundColor: "#38bdf8", paddingHorizontal: 10, paddingVertical: 6, borderRadius: 8 },
+  chipGreen: { backgroundColor: "#22c55e", paddingHorizontal: 10, paddingVertical: 6, borderRadius: 8 },
   chipPrimaryText: { color: "#0b1220", fontSize: 12, fontWeight: "700" },
   chip: { backgroundColor: "#334155", paddingHorizontal: 10, paddingVertical: 6, borderRadius: 8 },
   chipText: { color: "#f8fafc", fontSize: 12, fontWeight: "600" },
+  tripCard: { borderColor: "#22c55e", backgroundColor: "#0f2419" },
+  tripTitle: { color: "#4ade80", fontSize: 14, fontWeight: "700" },
+  tripRoute: { color: "#e2e8f0", fontSize: 12, marginTop: 2 },
+  badgeStay: { backgroundColor: "#0284c7", paddingHorizontal: 8, paddingVertical: 2, borderRadius: 999 },
+  badgeTrip: { backgroundColor: "#15803d", paddingHorizontal: 8, paddingVertical: 2, borderRadius: 999 },
   muted: { color: "#94a3b8", fontSize: 13 },
   modalBg: { flex: 1, backgroundColor: "rgba(0,0,0,0.72)", justifyContent: "center", padding: 16 },
   modalCard: { backgroundColor: "#1e293b", borderRadius: 16, padding: 16, borderWidth: 1, borderColor: "#334155" },
