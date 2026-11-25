@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from "react";
 import {
   Alert,
+  Image,
   Linking,
   Modal,
   Platform,
@@ -11,11 +12,11 @@ import {
   Text,
   TextInput,
   TouchableOpacity,
-  Vibration,
   View,
 } from "react-native";
 import { StatusBar } from "expo-status-bar";
 import { SafeAreaProvider, useSafeAreaInsets } from "react-native-safe-area-context";
+import { Ionicons } from "@expo/vector-icons";
 import * as Updates from "expo-updates";
 import * as Notifications from "expo-notifications";
 import * as SecureStore from "expo-secure-store";
@@ -74,6 +75,22 @@ function formatDuration(mins) {
   const h = Math.floor(m / 60);
   const rem = m % 60;
   return rem > 0 ? `${h}j ${rem}m` : `${h} jam`;
+}
+
+function osmMiniTile(lat, lng, z = 16) {
+  const n = 2 ** z;
+  const xFloat = ((lng + 180) / 360) * n;
+  const latRad = (lat * Math.PI) / 180;
+  const yFloat = ((1 - Math.log(Math.tan(latRad) + 1 / Math.cos(latRad)) / Math.PI) / 2) * n;
+  const x = Math.floor(xFloat);
+  const y = Math.floor(yFloat);
+  const px = Math.max(12, Math.min(88, (xFloat - x) * 100));
+  const py = Math.max(12, Math.min(88, (yFloat - y) * 100));
+  return {
+    url: `https://tile.openstreetmap.org/${z}/${x}/${y}.png`,
+    px,
+    py,
+  };
 }
 
 async function setupNotifications() {
@@ -158,6 +175,7 @@ function AppInner() {
   const [unreadNotifs, setUnreadNotifs] = useState(0);
   const [toastMsg, setToastMsg] = useState("");
 
+  const [panelMode, setPanelMode] = useState("devices");
   const [historyTarget, setHistoryTarget] = useState(null);
   const [historyDays, setHistoryDays] = useState(1);
   const [historyData, setHistoryData] = useState(null);
@@ -165,7 +183,6 @@ function AppInner() {
   const [mapReady, setMapReady] = useState(false);
   const [tick, setTick] = useState(0);
 
-  const [placeMode, setPlaceMode] = useState(false);
   const [editingPlaceId, setEditingPlaceId] = useState(null);
   const [placeName, setPlaceName] = useState("");
   const [placeRadius, setPlaceRadius] = useState(50);
@@ -173,7 +190,7 @@ function AppInner() {
   const [placeLng, setPlaceLng] = useState(110.8405);
   const [placeErr, setPlaceErr] = useState("");
 
-  const [notifOpen, setNotifOpen] = useState(false);
+  const [ringingTargets, setRingingTargets] = useState({});
   const [ringCaller, setRingCaller] = useState(null);
   const [batteryPromptOpen, setBatteryPromptOpen] = useState(false);
   const [batteryOpenedOnce, setBatteryOpenedOnce] = useState(false);
@@ -192,11 +209,30 @@ function AppInner() {
   const reconnectTimer = useRef(null);
   const toastTimer = useRef(null);
   const watchSubRef = useRef(null);
+  const ringTimersRef = useRef({});
+  const panelModeRef = useRef(panelMode);
+
+  useEffect(() => {
+    panelModeRef.current = panelMode;
+  }, [panelMode]);
 
   function showToast(text) {
     setToastMsg(text);
     if (toastTimer.current) clearTimeout(toastTimer.current);
     toastTimer.current = setTimeout(() => setToastMsg(""), 6000);
+  }
+
+  function clearRingingTarget(deviceId) {
+    if (ringTimersRef.current[deviceId]) {
+      clearTimeout(ringTimersRef.current[deviceId]);
+      delete ringTimersRef.current[deviceId];
+    }
+    setRingingTargets((prev) => {
+      if (!prev[deviceId]) return prev;
+      const next = { ...prev };
+      delete next[deviceId];
+      return next;
+    });
   }
 
   useEffect(() => {
@@ -255,14 +291,14 @@ function AppInner() {
 
   useEffect(() => {
     if (!mapReady || !webRef.current) return;
-    if (placeMode) {
+    if (panelMode === "places") {
       webRef.current.injectJavaScript(
         `window.setPickMode(true, ${Number(placeLat)}, ${Number(placeLng)}, ${Number(placeRadius)}); true;`
       );
     } else {
       webRef.current.injectJavaScript("window.setPickMode(false); true;");
     }
-  }, [placeMode, placeLat, placeLng, placeRadius, mapReady]);
+  }, [panelMode, placeLat, placeLng, placeRadius, mapReady]);
 
   useEffect(() => {
     if (!token || !user) return;
@@ -336,11 +372,14 @@ function AppInner() {
             upsert(msg.device);
           } else if (msg.type === "device_removed") {
             setDevices((prev) => prev.filter((d) => d.device_id !== msg.device_id));
+            clearRingingTarget(msg.device_id);
           } else if (msg.type === "places" && Array.isArray(msg.places)) {
             setPlaces(msg.places);
           } else if (msg.type === "notification" && msg.notification) {
             setNotifications((prev) => [msg.notification, ...prev].slice(0, 50));
-            setUnreadNotifs((n) => n + 1);
+            if (panelModeRef.current !== "notifs") {
+              setUnreadNotifs((n) => n + 1);
+            }
             showToast(msg.notification.message);
             showLocalOsNotification(msg.notification.message);
           } else if (msg.type === "force_logout") {
@@ -350,8 +389,15 @@ function AppInner() {
             if (msg.target_device_id === fullMyId || msg.target_username === user.username) {
               const caller = msg.from_display_name || msg.from_username;
               setRingCaller(caller);
-              startLoudRing(caller);
+              startLoudRing(caller, () => setRingCaller(null));
             }
+          } else if (msg.type === "stop_ring") {
+            const fullMyId = `${user.username}:${myDeviceId}`;
+            if (msg.target_device_id === fullMyId || msg.target_username === user.username) {
+              stopLoudRing().catch(() => {});
+              setRingCaller(null);
+            }
+            if (msg.target_device_id) clearRingingTarget(msg.target_device_id);
           }
         } catch {}
       };
@@ -417,7 +463,7 @@ function AppInner() {
     await clearSession();
     setRingCaller(null);
     setBgActive(false);
-    setPlaceMode(false);
+    setPanelMode("devices");
     setHistoryTarget(null);
     setHistoryData(null);
     setToken(null);
@@ -457,6 +503,13 @@ function AppInner() {
     }
   }
 
+  function confirmLogout() {
+    Alert.alert("Konfirmasi Keluar", "Yakin ingin keluar dari akun ini?", [
+      { text: "Batal", style: "cancel" },
+      { text: "Keluar", style: "destructive", onPress: handleLogout },
+    ]);
+  }
+
   async function handleLogout() {
     try {
       await stopLoudRing();
@@ -476,7 +529,7 @@ function AppInner() {
     await clearSession();
     setRingCaller(null);
     setBgActive(false);
-    setPlaceMode(false);
+    setPanelMode("devices");
     setHistoryTarget(null);
     setHistoryData(null);
     setToken(null);
@@ -493,12 +546,19 @@ function AppInner() {
     else sendCurrentLocationNow().catch(() => {});
   }
 
-  async function handleSendNow() {
+  async function focusMyCurrentLocation() {
     try {
-      await sendCurrentLocationNow();
-      showToast("Lokasi diperbarui");
+      const pos = await getCurrentCoords();
+      if (webRef.current) {
+        webRef.current.injectJavaScript(
+          `window.focusDevice(${pos.coords.latitude}, ${pos.coords.longitude}); true;`
+        );
+      }
+      sendCurrentLocationNow().catch(() => {});
     } catch (e) {
-      Alert.alert("GPS", e.message || "Gagal ambil lokasi");
+      const mine = devices.find((d) => d.device_id === `${user.username}:${myDeviceId}`);
+      if (mine) focusDevice(mine);
+      else Alert.alert("GPS", e.message || "Gagal mengambil lokasi saat ini");
     }
   }
 
@@ -509,9 +569,9 @@ function AppInner() {
   }
 
   async function openHistory(device, days = 1) {
-    setPlaceMode(false);
     setHistoryTarget(device);
     setHistoryDays(days);
+    setPanelMode("history");
     setHistoryLoading(true);
     try {
       const data = await apiRequest(
@@ -532,6 +592,7 @@ function AppInner() {
   function closeHistory() {
     setHistoryTarget(null);
     setHistoryData(null);
+    setPanelMode("devices");
     webRef.current?.injectJavaScript("window.setHistoryRoute([], []); true;");
   }
 
@@ -559,14 +620,41 @@ function AppInner() {
         method: "POST",
         token,
       });
-      showToast("Sinyal bunyikan dikirim");
+      if (ringTimersRef.current[deviceId]) clearTimeout(ringTimersRef.current[deviceId]);
+      setRingingTargets((prev) => ({ ...prev, [deviceId]: true }));
+      ringTimersRef.current[deviceId] = setTimeout(() => {
+        clearRingingTarget(deviceId);
+      }, 30000);
+      showToast("HP dibunyikan (maks 30 detik)");
     } catch (e) {
       Alert.alert("Gagal", e.message);
     }
   }
 
-  async function openCreatePlace() {
-    closeHistory();
+  async function stopPingDevice(deviceId) {
+    try {
+      await apiRequest(`/api/locations/${encodeURIComponent(deviceId)}/stop-ping`, {
+        method: "POST",
+        token,
+      });
+      clearRingingTarget(deviceId);
+      showToast("Suara & getaran dihentikan");
+    } catch (e) {
+      clearRingingTarget(deviceId);
+      Alert.alert("Gagal", e.message);
+    }
+  }
+
+  async function togglePlacesPanel() {
+    if (panelMode === "places") {
+      setPanelMode("devices");
+      return;
+    }
+    if (historyTarget) {
+      setHistoryTarget(null);
+      setHistoryData(null);
+      webRef.current?.injectJavaScript("window.setHistoryRoute([], []); true;");
+    }
     setPlaceErr("");
     setEditingPlaceId(null);
     setPlaceName("");
@@ -582,7 +670,21 @@ function AppInner() {
         setPlaceLng(pos.coords.longitude);
       } catch {}
     }
-    setPlaceMode(true);
+    setPanelMode("places");
+  }
+
+  function toggleNotifsPanel() {
+    if (panelMode === "notifs") {
+      setPanelMode("devices");
+      return;
+    }
+    if (historyTarget) {
+      setHistoryTarget(null);
+      setHistoryData(null);
+      webRef.current?.injectJavaScript("window.setHistoryRoute([], []); true;");
+    }
+    setUnreadNotifs(0);
+    setPanelMode("notifs");
   }
 
   async function snapPlaceToMyGps() {
@@ -694,11 +796,7 @@ function AppInner() {
     }
     try {
       if (editingUsername) {
-        const payload = {
-          username: uname,
-          display_name: dname,
-          role: formRole,
-        };
+        const payload = { username: uname, display_name: dname, role: formRole };
         if (formPassword.length > 0) payload.password = formPassword;
         const res = await apiRequest(`/api/users/${encodeURIComponent(editingUsername)}`, {
           method: "PATCH",
@@ -817,7 +915,7 @@ function AppInner() {
   if (booting) {
     return (
       <View style={[styles.center, { paddingTop: topInset + 20, paddingBottom: bottomInset + 20 }]}>
-        <StatusBar style="light" backgroundColor="#0f172a" translucent />
+        <StatusBar style="dark" backgroundColor="#f8fafc" translucent />
         <Text style={styles.muted}>Memuat...</Text>
       </View>
     );
@@ -826,7 +924,7 @@ function AppInner() {
   if (!token || !user) {
     return (
       <View style={[styles.center, { paddingTop: topInset + 20, paddingBottom: bottomInset + 20 }]}>
-        <StatusBar style="light" backgroundColor="#0f172a" translucent />
+        <StatusBar style="dark" backgroundColor="#f8fafc" translucent />
         <View style={styles.card}>
           <Text style={styles.loginTitle}>Lacak HP</Text>
 
@@ -838,7 +936,7 @@ function AppInner() {
             autoCapitalize="none"
             autoCorrect={false}
             placeholder="admin"
-            placeholderTextColor="#64748b"
+            placeholderTextColor="#94a3b8"
           />
 
           <Text style={styles.label}>Password</Text>
@@ -848,7 +946,7 @@ function AppInner() {
             onChangeText={setLoginPass}
             secureTextEntry
             placeholder="••••••"
-            placeholderTextColor="#64748b"
+            placeholderTextColor="#94a3b8"
           />
 
           {loginErr ? <Text style={styles.err}>{loginErr}</Text> : null}
@@ -864,41 +962,60 @@ function AppInner() {
 
   return (
     <View style={[styles.container, { paddingBottom: bottomInset }]}>
-      <StatusBar style="light" backgroundColor="#1e293b" translucent />
+      <StatusBar style="dark" backgroundColor="#ffffff" translucent />
       <View style={[styles.header, { paddingTop: topInset + 8 }]}>
         <View style={[styles.row, { flexShrink: 1 }]}>
-          <View style={[styles.dot, { backgroundColor: wsOnline ? "#22c55e" : "#ef4444" }]} />
+          <View style={[styles.dot, { backgroundColor: wsOnline ? "#16a34a" : "#dc2626" }]} />
           <Text style={styles.headerTitle} numberOfLines={1}>
             {user.display_name || user.username}
           </Text>
         </View>
         <View style={styles.row}>
           <TouchableOpacity
-            style={[styles.btnSmall, placeMode && styles.btnAccent]}
-            onPress={() => (placeMode ? setPlaceMode(false) : openCreatePlace())}
+            style={[styles.iconBtn, panelMode === "places" && styles.iconBtnActive]}
+            onPress={togglePlacesPanel}
+            accessibilityLabel="Buat Lokasi"
           >
-            <Text style={placeMode ? styles.btnAccentText : styles.btnSmallText}>
-              {placeMode ? "Tutup" : "Buat Lokasi"}
-            </Text>
+            <Ionicons
+              name={panelMode === "places" ? "location" : "location-outline"}
+              size={20}
+              color={panelMode === "places" ? "#0284c7" : "#0f172a"}
+            />
           </TouchableOpacity>
+
           <TouchableOpacity
-            style={styles.btnSmall}
-            onPress={() => {
-              setUnreadNotifs(0);
-              setNotifOpen(true);
-            }}
+            style={[styles.iconBtn, panelMode === "notifs" && styles.iconBtnActive]}
+            onPress={toggleNotifsPanel}
+            accessibilityLabel="Notifikasi"
           >
-            <Text style={styles.btnSmallText}>
-              Notif{unreadNotifs > 0 ? ` (${unreadNotifs})` : ""}
-            </Text>
+            <Ionicons
+              name={panelMode === "notifs" ? "notifications" : "notifications-outline"}
+              size={20}
+              color={panelMode === "notifs" ? "#0284c7" : "#0f172a"}
+            />
+            {unreadNotifs > 0 ? (
+              <View style={styles.badgeCount}>
+                <Text style={styles.badgeCountText}>{unreadNotifs > 9 ? "9+" : unreadNotifs}</Text>
+              </View>
+            ) : null}
           </TouchableOpacity>
+
           {user.role === "admin" ? (
-            <TouchableOpacity style={styles.btnSmall} onPress={openAdmin}>
-              <Text style={styles.btnSmallText}>User</Text>
+            <TouchableOpacity
+              style={styles.iconBtn}
+              onPress={openAdmin}
+              accessibilityLabel="Kelola User"
+            >
+              <Ionicons name="people-outline" size={20} color="#0f172a" />
             </TouchableOpacity>
           ) : null}
-          <TouchableOpacity style={[styles.btnSmall, styles.btnDanger]} onPress={handleLogout}>
-            <Text style={styles.btnDangerText}>Keluar</Text>
+
+          <TouchableOpacity
+            style={[styles.iconBtn, styles.iconBtnDanger]}
+            onPress={confirmLogout}
+            accessibilityLabel="Keluar"
+          >
+            <Ionicons name="log-out-outline" size={20} color="#dc2626" />
           </TouchableOpacity>
         </View>
       </View>
@@ -911,7 +1028,7 @@ function AppInner() {
 
       <View style={styles.bgBar}>
         <Text style={styles.bgText}>
-          Lacak Latar Belakang ({bgActive ? "AKTIF · TERKUNCI" : "BUTUH IZIN"})
+          Lacak Latar Belakang ({bgActive ? "AKTIF" : "BUTUH IZIN"})
         </Text>
         <View style={styles.row}>
           {!bgActive ? (
@@ -919,9 +1036,6 @@ function AppInner() {
               <Text style={styles.chipPrimaryText}>Aktifkan Izin</Text>
             </TouchableOpacity>
           ) : null}
-          <TouchableOpacity style={styles.miniBtn} onPress={handleSendNow}>
-            <Text style={styles.miniBtnText}>Update GPS</Text>
-          </TouchableOpacity>
           <Switch value={true} disabled={true} />
         </View>
       </View>
@@ -944,14 +1058,26 @@ function AppInner() {
             } catch {}
           }}
         />
+        <TouchableOpacity
+          style={styles.myLocFab}
+          onPress={focusMyCurrentLocation}
+          accessibilityLabel="Lokasi Saat Ini"
+        >
+          <Ionicons name="locate" size={22} color="#0284c7" />
+        </TouchableOpacity>
       </View>
 
-      {placeMode ? (
+      {panelMode === "places" ? (
         <ScrollView style={styles.list} contentContainerStyle={{ padding: 12, gap: 8 }}>
           <View style={styles.devCard}>
-            <Text style={styles.title}>
-              {editingPlaceId ? "Edit Lokasi" : "Buat Lokasi Baru"}
-            </Text>
+            <View style={styles.devHead}>
+              <Text style={styles.title}>
+                {editingPlaceId ? "Edit Lokasi" : "Buat Lokasi Baru"}
+              </Text>
+              <TouchableOpacity style={styles.btnSmall} onPress={() => setPanelMode("devices")}>
+                <Text style={styles.btnSmallText}>Tutup</Text>
+              </TouchableOpacity>
+            </View>
             <Text style={styles.devMeta}>
               Ketuk peta atau geser pin kuning untuk menentukan titik lokasi.
             </Text>
@@ -962,7 +1088,7 @@ function AppInner() {
               value={placeName}
               onChangeText={setPlaceName}
               placeholder="Rumah"
-              placeholderTextColor="#64748b"
+              placeholderTextColor="#94a3b8"
             />
 
             <Text style={styles.label}>Radius Deteksi (disarankan 50m / 100m)</Text>
@@ -1039,7 +1165,72 @@ function AppInner() {
             </View>
           ) : null}
         </ScrollView>
-      ) : historyTarget ? (
+      ) : panelMode === "notifs" ? (
+        <ScrollView style={styles.list} contentContainerStyle={{ padding: 12, gap: 8 }}>
+          <View style={styles.devCard}>
+            <View style={styles.devHead}>
+              <View style={{ flex: 1 }}>
+                <Text style={styles.title}>Notifikasi Lokasi</Text>
+                <Text style={styles.devMeta}>Ketuk notifikasi untuk melihat rute perjalanan user.</Text>
+              </View>
+              <TouchableOpacity style={styles.btnSmall} onPress={() => setPanelMode("devices")}>
+                <Text style={styles.btnSmallText}>Tutup</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+
+          {notifications.length === 0 ? (
+            <Text style={styles.muted}>Belum ada notifikasi pergi/sampai.</Text>
+          ) : (
+            notifications.map((n) => {
+              const hasCoords = typeof n.lat === "number" && typeof n.lng === "number";
+              const tile = hasCoords ? osmMiniTile(n.lat, n.lng, 16) : null;
+              return (
+                <TouchableOpacity
+                  key={n.id}
+                  style={[styles.devCard, styles.notifCard]}
+                  onPress={() =>
+                    openHistory(
+                      {
+                        device_id: n.device_id,
+                        username: n.username,
+                        display_name: n.display_name || n.username,
+                      },
+                      1
+                    )
+                  }
+                >
+                  <View style={styles.miniMapBox}>
+                    {tile ? (
+                      <>
+                        <Image source={{ uri: tile.url }} style={styles.miniMapImg} />
+                        <View
+                          style={[
+                            styles.miniMapPin,
+                            {
+                              left: `${tile.px}%`,
+                              top: `${tile.py}%`,
+                              backgroundColor: n.color || "#0284c7",
+                            },
+                          ]}
+                        />
+                      </>
+                    ) : (
+                      <Ionicons name="location" size={24} color="#0284c7" />
+                    )}
+                  </View>
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.devName}>{n.message}</Text>
+                    <Text style={styles.devMeta}>
+                      {formatAgo(n.created_at)} · Lihat rute perjalanan →
+                    </Text>
+                  </View>
+                </TouchableOpacity>
+              );
+            })
+          )}
+        </ScrollView>
+      ) : panelMode === "history" && historyTarget ? (
         <ScrollView style={styles.list} contentContainerStyle={{ padding: 12, gap: 8 }}>
           <View style={styles.devCard}>
             <View style={styles.devHead}>
@@ -1086,7 +1277,7 @@ function AppInner() {
                     <View style={styles.devHead}>
                       <Text style={styles.devName}>{seg.label}</Text>
                       <View style={styles.badgeStay}>
-                        <Text style={styles.badgeText}>SINGGAH</Text>
+                        <Text style={styles.badgeTextLight}>SINGGAH</Text>
                       </View>
                     </View>
                     <Text style={styles.devMeta}>
@@ -1100,18 +1291,14 @@ function AppInner() {
                         Jalan · {seg.distance_km} km
                       </Text>
                       <View style={styles.badgeTrip}>
-                        <Text style={styles.badgeText}>{formatDuration(seg.duration_min)}</Text>
+                        <Text style={styles.badgeTextLight}>{formatDuration(seg.duration_min)}</Text>
                       </View>
                     </View>
                     <Text style={styles.devMeta}>
                       {formatClock(seg.start_at)} – {formatClock(seg.end_at)}
                     </Text>
-                    <Text style={styles.tripRoute}>
-                      Dari: {seg.from_label}
-                    </Text>
-                    <Text style={styles.tripRoute}>
-                      Ke: {seg.to_label}
-                    </Text>
+                    <Text style={styles.tripRoute}>Dari: {seg.from_label}</Text>
+                    <Text style={styles.tripRoute}>Ke: {seg.to_label}</Text>
                   </>
                 )}
               </TouchableOpacity>
@@ -1122,7 +1309,7 @@ function AppInner() {
         <ScrollView style={styles.list} contentContainerStyle={{ padding: 12, gap: 10 }}>
           {devices.length === 0 ? (
             <Text style={styles.muted}>
-              Belum ada perangkat Android/iOS aktif. Tekan "Update GPS" atau tunggu GPS terkunci.
+              Belum ada perangkat Android/iOS aktif. Ketuk tombol target di kanan bawah peta untuk update GPS.
             </Text>
           ) : (
             devices.map((d) => {
@@ -1130,15 +1317,16 @@ function AppInner() {
               const bat = d.battery != null ? `${Math.round(d.battery)}%${d.charging ? " ⚡" : ""}` : "-";
               const acc = d.accuracy != null ? `${Math.round(d.accuracy)}m` : "-";
               const pLabel = d.platform === "ios" ? "iOS" : "Android";
+              const isRinging = Boolean(ringingTargets[d.device_id]);
               return (
                 <View key={d.device_id} style={styles.devCard}>
                   <View style={styles.devHead}>
                     <View style={styles.row}>
-                      <View style={[styles.userColorDot, { backgroundColor: d.color || "#38bdf8" }]} />
+                      <View style={[styles.userColorDot, { backgroundColor: d.color || "#0284c7" }]} />
                       <Text style={styles.devName}>{d.display_name || d.username}</Text>
                     </View>
                     <View style={[styles.badge, d.platform === "ios" ? styles.badgeIos : styles.badgeAnd]}>
-                      <Text style={styles.badgeText}>{pLabel}</Text>
+                      <Text style={d.platform === "ios" ? styles.badgeIosText : styles.badgeAndText}>{pLabel}</Text>
                     </View>
                   </View>
                   <Text style={styles.devMeta}>
@@ -1155,9 +1343,15 @@ function AppInner() {
                     <TouchableOpacity style={styles.chip} onPress={() => openRoute(d)}>
                       <Text style={styles.chipText}>Rute</Text>
                     </TouchableOpacity>
-                    <TouchableOpacity style={styles.chip} onPress={() => pingDevice(d.device_id)}>
-                      <Text style={styles.chipText}>Bunyikan</Text>
-                    </TouchableOpacity>
+                    {isRinging ? (
+                      <TouchableOpacity style={styles.chipDanger} onPress={() => stopPingDevice(d.device_id)}>
+                        <Text style={styles.chipPrimaryText}>Hentikan</Text>
+                      </TouchableOpacity>
+                    ) : (
+                      <TouchableOpacity style={styles.chip} onPress={() => pingDevice(d.device_id)}>
+                        <Text style={styles.chipText}>Bunyikan</Text>
+                      </TouchableOpacity>
+                    )}
                     <TouchableOpacity style={styles.chipGreen} onPress={() => openHistory(d, 1)}>
                       <Text style={styles.chipPrimaryText}>History</Text>
                     </TouchableOpacity>
@@ -1168,33 +1362,6 @@ function AppInner() {
           )}
         </ScrollView>
       )}
-
-      <Modal visible={notifOpen} animationType="slide" transparent>
-        <View style={[styles.modalBg, { paddingTop: topInset + 16, paddingBottom: bottomInset + 16 }]}>
-          <View style={styles.modalCard}>
-            <View style={styles.devHead}>
-              <Text style={styles.title}>Notifikasi Lokasi</Text>
-              <TouchableOpacity style={styles.btnSmall} onPress={() => setNotifOpen(false)}>
-                <Text style={styles.btnSmallText}>Tutup</Text>
-              </TouchableOpacity>
-            </View>
-            <ScrollView style={{ maxHeight: 380, marginTop: 10 }}>
-              {notifications.length === 0 ? (
-                <Text style={styles.muted}>Belum ada notifikasi pergi/sampai.</Text>
-              ) : (
-                notifications.map((n) => (
-                  <View key={n.id} style={styles.userRow}>
-                    <View style={{ flex: 1 }}>
-                      <Text style={styles.devName}>{n.message}</Text>
-                      <Text style={styles.devMeta}>{formatAgo(n.created_at)}</Text>
-                    </View>
-                  </View>
-                ))
-              )}
-            </ScrollView>
-          </View>
-        </View>
-      </Modal>
 
       <Modal visible={adminOpen} animationType="slide" transparent>
         <View style={[styles.modalBg, { paddingTop: topInset + 16, paddingBottom: bottomInset + 16 }]}>
@@ -1216,7 +1383,7 @@ function AppInner() {
               autoCapitalize="none"
               autoCorrect={false}
               placeholder="lucky"
-              placeholderTextColor="#64748b"
+              placeholderTextColor="#94a3b8"
             />
 
             <Text style={styles.label}>Nama (tampil di peta &amp; notifikasi)</Text>
@@ -1225,7 +1392,7 @@ function AppInner() {
               value={formDisplayName}
               onChangeText={setFormDisplayName}
               placeholder="Lucky Frediyanto"
-              placeholderTextColor="#64748b"
+              placeholderTextColor="#94a3b8"
             />
 
             <Text style={styles.label}>
@@ -1237,7 +1404,7 @@ function AppInner() {
               onChangeText={setFormPassword}
               secureTextEntry
               placeholder="••••••"
-              placeholderTextColor="#64748b"
+              placeholderTextColor="#94a3b8"
             />
 
             {editingUsername !== user.username ? (
@@ -1267,7 +1434,7 @@ function AppInner() {
                 <View key={u.username} style={styles.userRow}>
                   <View style={{ flex: 1 }}>
                     <View style={styles.row}>
-                      <View style={[styles.userColorDot, { backgroundColor: u.color || "#38bdf8" }]} />
+                      <View style={[styles.userColorDot, { backgroundColor: u.color || "#0284c7" }]} />
                       <Text style={styles.devName}>{u.display_name || u.username}</Text>
                     </View>
                     <Text style={styles.devMeta}>
@@ -1297,9 +1464,10 @@ function AppInner() {
       <Modal visible={Boolean(ringCaller)} animationType="fade" transparent>
         <View style={styles.alarmBg}>
           <View style={styles.alarmCard}>
-            <Text style={styles.alarmTitle}>HP SEDANG DILACAK!</Text>
+            <Ionicons name="volume-high" size={44} color="#dc2626" />
+            <Text style={styles.alarmTitle}>HP SEDANG DIBUNYIKAN</Text>
             <Text style={styles.alarmSub}>
-              Dibunyikan oleh {ringCaller} (Volume 100%)
+              Oleh {ringCaller} · Volume 100% (maks 30 detik)
             </Text>
             <TouchableOpacity
               style={styles.alarmStopBtn}
@@ -1308,7 +1476,7 @@ function AppInner() {
                 setRingCaller(null);
               }}
             >
-              <Text style={styles.alarmStopText}>MATIKAN SUARA</Text>
+              <Text style={styles.alarmStopText}>Hentikan</Text>
             </TouchableOpacity>
           </View>
         </View>
@@ -1327,101 +1495,185 @@ export default function App() {
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: "#0f172a" },
-  center: { flex: 1, backgroundColor: "#0f172a", justifyContent: "center", padding: 20 },
-  card: { backgroundColor: "#1e293b", borderRadius: 16, padding: 20, borderWidth: 1, borderColor: "#334155" },
-  loginTitle: { color: "#f8fafc", fontSize: 22, fontWeight: "700", marginBottom: 8 },
-  title: { color: "#f8fafc", fontSize: 18, fontWeight: "700" },
-  label: { color: "#94a3b8", fontSize: 12, marginTop: 10, marginBottom: 4 },
+  container: { flex: 1, backgroundColor: "#f8fafc" },
+  center: { flex: 1, backgroundColor: "#f8fafc", justifyContent: "center", padding: 20 },
+  card: {
+    backgroundColor: "#ffffff",
+    borderRadius: 16,
+    padding: 20,
+    borderWidth: 1,
+    borderColor: "#e2e8f0",
+    shadowColor: "#0f172a",
+    shadowOpacity: 0.08,
+    shadowRadius: 12,
+    elevation: 3,
+  },
+  loginTitle: { color: "#0f172a", fontSize: 22, fontWeight: "700", marginBottom: 8 },
+  title: { color: "#0f172a", fontSize: 17, fontWeight: "700" },
+  label: { color: "#475569", fontSize: 12, fontWeight: "600", marginTop: 10, marginBottom: 4 },
   input: {
-    backgroundColor: "#0b1220",
-    color: "#f8fafc",
+    backgroundColor: "#ffffff",
+    color: "#0f172a",
     borderRadius: 10,
     borderWidth: 1,
-    borderColor: "#334155",
+    borderColor: "#cbd5e1",
     paddingHorizontal: 12,
     paddingVertical: 10,
     fontSize: 14,
   },
-  err: { color: "#fca5a5", fontSize: 12, marginTop: 8 },
-  btnPrimary: { backgroundColor: "#38bdf8", borderRadius: 10, paddingVertical: 12, alignItems: "center", marginTop: 14 },
-  btnPrimaryText: { color: "#0b1220", fontWeight: "700", fontSize: 14 },
+  err: { color: "#dc2626", fontSize: 12, marginTop: 8 },
+  btnPrimary: { backgroundColor: "#0284c7", borderRadius: 10, paddingVertical: 12, alignItems: "center", marginTop: 14 },
+  btnPrimaryText: { color: "#ffffff", fontWeight: "700", fontSize: 14 },
   header: {
     minHeight: 54,
     paddingBottom: 10,
-    backgroundColor: "#1e293b",
+    backgroundColor: "#ffffff",
     borderBottomWidth: 1,
-    borderBottomColor: "#334155",
-    paddingHorizontal: 10,
+    borderBottomColor: "#e2e8f0",
+    paddingHorizontal: 12,
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "space-between",
-    gap: 6,
+    gap: 8,
   },
-  headerTitle: { color: "#f8fafc", fontWeight: "700", fontSize: 14, maxWidth: 120 },
-  row: { flexDirection: "row", alignItems: "center", gap: 6 },
+  headerTitle: { color: "#0f172a", fontWeight: "700", fontSize: 15, maxWidth: 150 },
+  row: { flexDirection: "row", alignItems: "center", gap: 7 },
   dot: { width: 9, height: 9, borderRadius: 5 },
-  btnSmall: { backgroundColor: "#334155", paddingHorizontal: 8, paddingVertical: 6, borderRadius: 8 },
-  btnSmallText: { color: "#f8fafc", fontSize: 11, fontWeight: "600" },
-  btnAccent: { backgroundColor: "#38bdf8" },
-  btnAccentText: { color: "#0b1220", fontSize: 11, fontWeight: "700" },
-  btnDanger: { backgroundColor: "#ef4444" },
-  btnDangerText: { color: "#ffffff", fontSize: 11, fontWeight: "700" },
+  iconBtn: {
+    width: 38,
+    height: 38,
+    borderRadius: 10,
+    backgroundColor: "#f1f5f9",
+    borderWidth: 1,
+    borderColor: "#e2e8f0",
+    alignItems: "center",
+    justifyContent: "center",
+    position: "relative",
+  },
+  iconBtnActive: { backgroundColor: "#e0f2fe", borderColor: "#38bdf8" },
+  iconBtnDanger: { backgroundColor: "#fee2e2", borderColor: "#fecaca" },
+  badgeCount: {
+    position: "absolute",
+    top: -4,
+    right: -4,
+    minWidth: 17,
+    height: 17,
+    borderRadius: 9,
+    backgroundColor: "#dc2626",
+    alignItems: "center",
+    justifyContent: "center",
+    paddingHorizontal: 4,
+  },
+  badgeCountText: { color: "#ffffff", fontSize: 10, fontWeight: "700" },
+  btnSmall: { backgroundColor: "#f1f5f9", borderWidth: 1, borderColor: "#e2e8f0", paddingHorizontal: 10, paddingVertical: 6, borderRadius: 8 },
+  btnSmallText: { color: "#0f172a", fontSize: 12, fontWeight: "600" },
+  btnDanger: { backgroundColor: "#dc2626", borderColor: "#dc2626" },
+  btnDangerText: { color: "#ffffff", fontSize: 12, fontWeight: "700" },
   toastBar: {
-    backgroundColor: "#0c4a6e",
-    borderBottomWidth: 1,
-    borderBottomColor: "#38bdf8",
+    backgroundColor: "#0f172a",
     paddingHorizontal: 14,
     paddingVertical: 8,
   },
-  toastText: { color: "#f8fafc", fontSize: 12, fontWeight: "700" },
+  toastText: { color: "#ffffff", fontSize: 12, fontWeight: "600" },
   bgBar: {
-    backgroundColor: "#162033",
+    backgroundColor: "#f1f5f9",
     paddingHorizontal: 12,
-    paddingVertical: 5,
+    paddingVertical: 4,
     borderBottomWidth: 1,
-    borderBottomColor: "#334155",
+    borderBottomColor: "#e2e8f0",
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "space-between",
   },
-  bgText: { color: "#cbd5e1", fontSize: 11, fontWeight: "600" },
-  miniBtn: { backgroundColor: "#334155", paddingHorizontal: 8, paddingVertical: 5, borderRadius: 7 },
-  miniBtnAccent: { backgroundColor: "#38bdf8", paddingHorizontal: 8, paddingVertical: 5, borderRadius: 7 },
-  miniBtnText: { color: "#e2e8f0", fontSize: 11, fontWeight: "600" },
-  userColorDot: { width: 12, height: 12, borderRadius: 6, borderWidth: 1.5, borderColor: "#fff" },
-  btnWarn: { backgroundColor: "#f59e0b", paddingHorizontal: 8, paddingVertical: 6, borderRadius: 8 },
-  btnWarnText: { color: "#0b1220", fontSize: 11, fontWeight: "700" },
-  alarmBg: { flex: 1, backgroundColor: "rgba(127, 29, 29, 0.92)", justifyContent: "center", padding: 24 },
-  alarmCard: { backgroundColor: "#1e293b", borderRadius: 20, padding: 24, borderWidth: 2, borderColor: "#ef4444", alignItems: "center" },
-  alarmTitle: { color: "#fca5a5", fontSize: 22, fontWeight: "800", textAlign: "center" },
-  alarmSub: { color: "#f8fafc", fontSize: 14, marginTop: 8, textAlign: "center" },
-  alarmStopBtn: { backgroundColor: "#ef4444", paddingHorizontal: 28, paddingVertical: 14, borderRadius: 12, marginTop: 20, width: "100%", alignItems: "center" },
-  alarmStopText: { color: "#fff", fontSize: 16, fontWeight: "800" },
-  mapWrap: { flex: 1.15, backgroundColor: "#0b1220" },
-  list: { flex: 0.85, backgroundColor: "#0f172a", borderTopWidth: 1, borderTopColor: "#334155" },
-  devCard: { backgroundColor: "#1e293b", borderRadius: 12, padding: 12, borderWidth: 1, borderColor: "#334155" },
+  bgText: { color: "#334155", fontSize: 11, fontWeight: "600" },
+  miniBtnAccent: { backgroundColor: "#0284c7", paddingHorizontal: 9, paddingVertical: 5, borderRadius: 7 },
+  mapWrap: { flex: 1.15, backgroundColor: "#e2e8f0", position: "relative" },
+  myLocFab: {
+    position: "absolute",
+    right: 12,
+    bottom: 14,
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: "#ffffff",
+    borderWidth: 1,
+    borderColor: "#cbd5e1",
+    alignItems: "center",
+    justifyContent: "center",
+    shadowColor: "#0f172a",
+    shadowOpacity: 0.22,
+    shadowRadius: 6,
+    elevation: 5,
+  },
+  list: { flex: 0.85, backgroundColor: "#f8fafc", borderTopWidth: 1, borderTopColor: "#e2e8f0" },
+  devCard: {
+    backgroundColor: "#ffffff",
+    borderRadius: 12,
+    padding: 12,
+    borderWidth: 1,
+    borderColor: "#e2e8f0",
+    shadowColor: "#0f172a",
+    shadowOpacity: 0.04,
+    shadowRadius: 4,
+    elevation: 1,
+  },
   devHead: { flexDirection: "row", justifyContent: "space-between", alignItems: "center" },
-  devName: { color: "#f8fafc", fontSize: 14, fontWeight: "700" },
-  devMeta: { color: "#94a3b8", fontSize: 12, marginTop: 3 },
+  devName: { color: "#0f172a", fontSize: 14, fontWeight: "700" },
+  devMeta: { color: "#64748b", fontSize: 12, marginTop: 3 },
   badge: { paddingHorizontal: 8, paddingVertical: 2, borderRadius: 999 },
-  badgeIos: { backgroundColor: "#1d4ed8" },
-  badgeAnd: { backgroundColor: "#15803d" },
-  badgeText: { color: "#fff", fontSize: 10, fontWeight: "700" },
+  badgeIos: { backgroundColor: "#dbeafe" },
+  badgeIosText: { color: "#1d4ed8", fontSize: 10, fontWeight: "700" },
+  badgeAnd: { backgroundColor: "#dcfce7" },
+  badgeAndText: { color: "#15803d", fontSize: 10, fontWeight: "700" },
+  badgeTextLight: { color: "#ffffff", fontSize: 10, fontWeight: "700" },
   devActions: { flexDirection: "row", flexWrap: "wrap", gap: 6, marginTop: 8 },
-  chipPrimary: { backgroundColor: "#38bdf8", paddingHorizontal: 10, paddingVertical: 6, borderRadius: 8 },
-  chipGreen: { backgroundColor: "#22c55e", paddingHorizontal: 10, paddingVertical: 6, borderRadius: 8 },
-  chipPrimaryText: { color: "#0b1220", fontSize: 12, fontWeight: "700" },
-  chip: { backgroundColor: "#334155", paddingHorizontal: 10, paddingVertical: 6, borderRadius: 8 },
-  chipText: { color: "#f8fafc", fontSize: 12, fontWeight: "600" },
-  tripCard: { borderColor: "#22c55e", backgroundColor: "#0f2419" },
-  tripTitle: { color: "#4ade80", fontSize: 14, fontWeight: "700" },
-  tripRoute: { color: "#e2e8f0", fontSize: 12, marginTop: 2 },
+  chipPrimary: { backgroundColor: "#0284c7", paddingHorizontal: 10, paddingVertical: 6, borderRadius: 8 },
+  chipGreen: { backgroundColor: "#16a34a", paddingHorizontal: 10, paddingVertical: 6, borderRadius: 8 },
+  chipDanger: { backgroundColor: "#dc2626", paddingHorizontal: 10, paddingVertical: 6, borderRadius: 8 },
+  chipPrimaryText: { color: "#ffffff", fontSize: 12, fontWeight: "700" },
+  chip: { backgroundColor: "#f1f5f9", borderWidth: 1, borderColor: "#e2e8f0", paddingHorizontal: 10, paddingVertical: 6, borderRadius: 8 },
+  chipText: { color: "#0f172a", fontSize: 12, fontWeight: "600" },
+  tripCard: { borderColor: "#22c55e", backgroundColor: "#f0fdf4" },
+  tripTitle: { color: "#15803d", fontSize: 14, fontWeight: "700" },
+  tripRoute: { color: "#1e293b", fontSize: 12, marginTop: 2 },
   badgeStay: { backgroundColor: "#0284c7", paddingHorizontal: 8, paddingVertical: 2, borderRadius: 999 },
-  badgeTrip: { backgroundColor: "#15803d", paddingHorizontal: 8, paddingVertical: 2, borderRadius: 999 },
-  muted: { color: "#94a3b8", fontSize: 13 },
-  modalBg: { flex: 1, backgroundColor: "rgba(0,0,0,0.72)", justifyContent: "center", padding: 16 },
-  modalCard: { backgroundColor: "#1e293b", borderRadius: 16, padding: 16, borderWidth: 1, borderColor: "#334155" },
+  badgeTrip: { backgroundColor: "#16a34a", paddingHorizontal: 8, paddingVertical: 2, borderRadius: 999 },
+  notifCard: { flexDirection: "row", alignItems: "center", gap: 10 },
+  miniMapBox: {
+    width: 64,
+    height: 64,
+    borderRadius: 10,
+    overflow: "hidden",
+    backgroundColor: "#e2e8f0",
+    borderWidth: 1,
+    borderColor: "#cbd5e1",
+    alignItems: "center",
+    justifyContent: "center",
+    position: "relative",
+  },
+  miniMapImg: { width: "100%", height: "100%" },
+  miniMapPin: {
+    width: 13,
+    height: 13,
+    borderRadius: 7,
+    borderWidth: 2,
+    borderColor: "#ffffff",
+    position: "absolute",
+    marginLeft: -6.5,
+    marginTop: -6.5,
+  },
+  userColorDot: { width: 12, height: 12, borderRadius: 6, borderWidth: 1.5, borderColor: "#ffffff" },
+  btnWarn: { backgroundColor: "#fef3c7", borderWidth: 1, borderColor: "#fcd34d", paddingHorizontal: 8, paddingVertical: 6, borderRadius: 8 },
+  btnWarnText: { color: "#92400e", fontSize: 11, fontWeight: "700" },
+  muted: { color: "#64748b", fontSize: 13 },
+  modalBg: { flex: 1, backgroundColor: "rgba(15,23,42,0.45)", justifyContent: "center", padding: 16 },
+  modalCard: { backgroundColor: "#ffffff", borderRadius: 16, padding: 16, borderWidth: 1, borderColor: "#e2e8f0" },
+  alarmBg: { flex: 1, backgroundColor: "rgba(153, 27, 27, 0.88)", justifyContent: "center", padding: 24 },
+  alarmCard: { backgroundColor: "#ffffff", borderRadius: 20, padding: 24, borderWidth: 2, borderColor: "#dc2626", alignItems: "center" },
+  alarmTitle: { color: "#dc2626", fontSize: 20, fontWeight: "800", textAlign: "center", marginTop: 8 },
+  alarmSub: { color: "#334155", fontSize: 13, marginTop: 6, textAlign: "center" },
+  alarmStopBtn: { backgroundColor: "#dc2626", paddingHorizontal: 28, paddingVertical: 14, borderRadius: 12, marginTop: 18, width: "100%", alignItems: "center" },
+  alarmStopText: { color: "#ffffff", fontSize: 16, fontWeight: "800" },
   userRow: {
     flexDirection: "row",
     justifyContent: "space-between",
@@ -1429,6 +1681,6 @@ const styles = StyleSheet.create({
     gap: 8,
     paddingVertical: 8,
     borderBottomWidth: 1,
-    borderBottomColor: "#334155",
+    borderBottomColor: "#e2e8f0",
   },
 });

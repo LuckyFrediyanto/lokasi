@@ -6,50 +6,63 @@ export const DASHBOARD_HTML = `<!doctype html>
 <title>Lacak HP</title>
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
 <style>
-  :root { --bg:#0f172a; --card:#1e293b; --line:#334155; --text:#f8fafc; --muted:#94a3b8; --blue:#38bdf8; --green:#22c55e; --red:#ef4444; }
+  :root { --bg:#f8fafc; --card:#ffffff; --line:#e2e8f0; --text:#0f172a; --muted:#64748b; --blue:#0284c7; --green:#16a34a; --red:#dc2626; --soft:#f1f5f9; }
   * { box-sizing:border-box; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif; }
   html,body { margin:0; padding:0; height:100%; background:var(--bg); color:var(--text); overflow:hidden; }
   .hidden { display:none !important; }
-  #loginView { height:100%; display:flex; align-items:center; justify-content:center; padding:20px; }
-  .box { width:100%; max-width:360px; background:var(--card); border:1px solid var(--line); border-radius:16px; padding:24px; }
-  h1 { margin:0 0 14px; font-size:21px; }
-  label { display:block; font-size:12px; color:var(--muted); margin:10px 0 4px; }
-  input,select { width:100%; padding:10px 12px; border-radius:10px; border:1px solid var(--line); background:#0b1220; color:var(--text); font-size:14px; }
-  button { cursor:pointer; border:0; border-radius:10px; padding:9px 12px; font-weight:600; font-size:12px; color:#0b1220; background:var(--blue); }
-  button.sec { background:#334155; color:var(--text); }
+  #loginView { height:100%; display:flex; align-items:center; justify-content:center; padding:20px; background:var(--bg); }
+  .box { width:100%; max-width:360px; background:var(--card); border:1px solid var(--line); border-radius:16px; padding:24px; box-shadow:0 8px 24px rgba(15,23,42,.08); }
+  h1 { margin:0 0 14px; font-size:21px; color:var(--text); }
+  label { display:block; font-size:12px; color:var(--muted); margin:10px 0 4px; font-weight:600; }
+  input,select { width:100%; padding:10px 12px; border-radius:10px; border:1px solid #cbd5e1; background:#fff; color:var(--text); font-size:14px; }
+  button { cursor:pointer; border:0; border-radius:10px; padding:8px 12px; font-weight:600; font-size:12px; color:#fff; background:var(--blue); }
+  button.sec { background:var(--soft); color:var(--text); border:1px solid var(--line); }
   button.danger { background:var(--red); color:#fff; }
+  button.green { background:var(--green); color:#fff; }
   button.full { width:100%; margin-top:14px; padding:12px; font-size:14px; }
-  .err { color:#fca5a5; font-size:12px; margin-top:8px; min-height:16px; }
+  .icon-btn { width:38px; height:38px; padding:0; border-radius:10px; background:var(--soft); color:var(--text); border:1px solid var(--line); display:inline-flex; align-items:center; justify-content:center; position:relative; }
+  .icon-btn.active { background:#e0f2fe; border-color:#38bdf8; color:#0284c7; }
+  .icon-btn.danger-icon { background:#fee2e2; border-color:#fecaca; color:#dc2626; }
+  .icon-btn svg { width:19px; height:19px; fill:currentColor; }
+  .notif-badge { position:absolute; top:-4px; right:-4px; min-width:17px; height:17px; padding:0 4px; border-radius:999px; background:#dc2626; color:#fff; font-size:10px; font-weight:700; display:flex; align-items:center; justify-content:center; }
+  .err { color:var(--red); font-size:12px; margin-top:8px; min-height:16px; }
   #appView { height:100%; display:flex; flex-direction:column; }
-  header { height:56px; background:var(--card); border-bottom:1px solid var(--line); display:flex; align-items:center; justify-content:space-between; padding:0 14px; gap:8px; z-index:500; }
+  header { height:56px; background:var(--card); border-bottom:1px solid var(--line); display:flex; align-items:center; justify-content:space-between; padding:0 14px; gap:8px; z-index:500; box-shadow:0 1px 4px rgba(15,23,42,.05); }
   .brand { display:flex; align-items:center; gap:8px; font-weight:700; font-size:15px; }
   .dot { width:9px; height:9px; border-radius:50%; background:var(--red); display:inline-block; }
   .dot.ok { background:var(--green); }
-  .actions { display:flex; gap:6px; align-items:center; }
+  .actions { display:flex; gap:8px; align-items:center; }
   main { flex:1; display:flex; position:relative; overflow:hidden; }
-  #map { flex:1; height:100%; }
-  aside { width:340px; background:var(--card); border-left:1px solid var(--line); overflow:auto; padding:12px; display:flex; flex-direction:column; gap:10px; }
+  .map-wrap { flex:1; height:100%; position:relative; }
+  #map { width:100%; height:100%; }
+  .my-loc-btn { position:absolute; right:14px; bottom:18px; z-index:450; width:44px; height:44px; border-radius:50%; background:#fff; color:#0f172a; border:1px solid #cbd5e1; box-shadow:0 3px 12px rgba(15,23,42,.22); display:flex; align-items:center; justify-content:center; padding:0; }
+  .my-loc-btn svg { width:22px; height:22px; fill:#0284c7; }
+  aside { width:360px; background:var(--bg); border-left:1px solid var(--line); overflow:auto; padding:12px; display:flex; flex-direction:column; gap:10px; }
   @media (max-width:768px) {
     main { flex-direction:column; }
     aside { width:100%; height:44%; border-left:0; border-top:1px solid var(--line); }
   }
-  .dev { background:#0b1220; border:1px solid var(--line); border-radius:12px; padding:10px 12px; }
+  .dev { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:11px 12px; box-shadow:0 1px 3px rgba(15,23,42,.04); }
   .dev-top { display:flex; justify-content:space-between; align-items:center; gap:6px; }
-  .dev-name { font-weight:700; font-size:14px; }
-  .badge { font-size:11px; padding:2px 7px; border-radius:999px; background:#334155; color:var(--text); }
-  .badge.ios { background:#1d4ed8; }
-  .badge.android { background:#15803d; }
+  .dev-name { font-weight:700; font-size:14px; color:var(--text); }
+  .badge { font-size:11px; padding:2px 8px; border-radius:999px; background:#e2e8f0; color:#334155; font-weight:700; }
+  .badge.ios { background:#dbeafe; color:#1d4ed8; }
+  .badge.android { background:#dcfce7; color:#15803d; }
   .meta { font-size:12px; color:var(--muted); margin-top:4px; line-height:1.4; }
   .dev-btns { display:flex; gap:6px; margin-top:8px; flex-wrap:wrap; }
-  .modal-bg { position:fixed; inset:0; background:rgba(0,0,0,.65); display:flex; align-items:center; justify-content:center; padding:16px; z-index:1000; }
-  .modal { width:100%; max-width:440px; max-height:86vh; overflow:auto; background:var(--card); border:1px solid var(--line); border-radius:14px; padding:18px; }
+  .modal-bg { position:fixed; inset:0; background:rgba(15,23,42,.45); display:flex; align-items:center; justify-content:center; padding:16px; z-index:1000; }
+  .modal { width:100%; max-width:440px; max-height:86vh; overflow:auto; background:var(--card); border:1px solid var(--line); border-radius:14px; padding:18px; box-shadow:0 16px 40px rgba(15,23,42,.2); }
   .user-row { display:flex; justify-content:space-between; align-items:center; gap:8px; padding:8px 0; border-bottom:1px solid var(--line); font-size:13px; }
-  .user-pin { width:34px; height:34px; border-radius:50%; border:3px solid #fff; display:flex; align-items:center; justify-content:center; box-shadow:0 3px 10px rgba(0,0,0,.55); position:relative; }
+  .user-pin { width:34px; height:34px; border-radius:50%; border:3px solid #fff; display:flex; align-items:center; justify-content:center; box-shadow:0 3px 10px rgba(15,23,42,.35); position:relative; }
   .user-pin svg { width:18px; height:18px; fill:#fff; }
-  .user-pin .st { width:10px; height:10px; border-radius:50%; border:2px solid #0f172a; position:absolute; right:-2px; bottom:-2px; background:#22c55e; }
+  .user-pin .st { width:10px; height:10px; border-radius:50%; border:2px solid #fff; position:absolute; right:-2px; bottom:-2px; background:#22c55e; }
   .user-pin .st.off { background:#94a3b8; }
   .color-dot { width:11px; height:11px; border-radius:50%; display:inline-block; margin-right:6px; vertical-align:middle; }
-  .toast { position:fixed; top:66px; left:50%; transform:translateX(-50%); background:#0f172a; border:1px solid #38bdf8; color:#fff; padding:10px 14px; border-radius:12px; z-index:900; font-size:13px; font-weight:600; box-shadow:0 6px 24px rgba(0,0,0,.45); }
+  .toast { position:fixed; top:66px; left:50%; transform:translateX(-50%); background:#0f172a; color:#fff; padding:10px 14px; border-radius:12px; z-index:900; font-size:13px; font-weight:600; box-shadow:0 6px 24px rgba(15,23,42,.25); }
+  .notif-card { display:flex; gap:10px; align-items:center; cursor:pointer; }
+  .mini-map { width:64px; height:64px; border-radius:10px; overflow:hidden; position:relative; flex-shrink:0; border:1px solid var(--line); background:#e2e8f0; }
+  .mini-map img { width:100%; height:100%; object-fit:cover; display:block; }
+  .mini-pin { width:12px; height:12px; border-radius:50%; border:2px solid #fff; position:absolute; transform:translate(-50%,-50%); box-shadow:0 1px 4px rgba(0,0,0,.45); }
 </style>
 </head>
 <body>
@@ -72,28 +85,30 @@ export const DASHBOARD_HTML = `<!doctype html>
       <span id="meLabel">Lacak HP</span>
     </div>
     <div class="actions">
-      <button class="sec" id="notifBtn" type="button">Notifikasi</button>
-      <button class="sec hidden" id="adminBtn" type="button">Kelola User</button>
-      <button class="danger" id="logoutBtn" type="button">Keluar</button>
+      <button class="icon-btn" id="notifBtn" type="button" title="Notifikasi">
+        <svg viewBox="0 0 24 24"><path d="M12 22a2 2 0 0 0 2-2h-4a2 2 0 0 0 2 2zm6-6v-5c0-3.07-1.64-5.64-4.5-6.32V4a1.5 1.5 0 0 0-3 0v.68C7.63 5.36 6 7.92 6 11v5l-2 2v1h16v-1l-2-2z"/></svg>
+        <span class="notif-badge hidden" id="notifBadge">0</span>
+      </button>
+      <button class="icon-btn hidden" id="adminBtn" type="button" title="Kelola User">
+        <svg viewBox="0 0 24 24"><path d="M16 11c1.66 0 2.99-1.34 2.99-3S17.66 5 16 5s-3 1.34-3 3 1.34 3 3 3zm-8 0c1.66 0 2.99-1.34 2.99-3S9.66 5 8 5 5 6.34 5 8s1.34 3 3 3zm0 2c-2.33 0-7 1.17-7 3.5V19h14v-2.5c0-2.33-4.67-3.5-7-3.5zm8 0c-.29 0-.62.02-.97.05 1.16.84 1.97 1.97 1.97 3.45V19h6v-2.5c0-2.33-4.67-3.5-7-3.5z"/></svg>
+      </button>
+      <button class="icon-btn danger-icon" id="logoutBtn" type="button" title="Keluar">
+        <svg viewBox="0 0 24 24"><path d="M17 7l-1.41 1.41L18.17 11H8v2h10.17l-2.58 2.58L17 17l5-5zM4 5h8V3H4c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h8v-2H4V5z"/></svg>
+      </button>
     </div>
   </header>
   <main>
-    <div id="map"></div>
+    <div class="map-wrap">
+      <div id="map"></div>
+      <button class="my-loc-btn" id="myLocBtn" type="button" title="Lokasi Saat Ini">
+        <svg viewBox="0 0 24 24"><path d="M12 8c-2.21 0-4 1.79-4 4s1.79 4 4 4 4-1.79 4-4-1.79-4-4-4zm8.94 3A8.994 8.994 0 0 0 13 3.06V1h-2v2.06A8.994 8.994 0 0 0 3.06 11H1v2h2.06A8.994 8.994 0 0 0 11 20.94V23h2v-2.06A8.994 8.994 0 0 0 20.94 13H23v-2h-2.06zM12 19c-3.87 0-7-3.13-7-7s3.13-7 7-7 7 3.13 7 7-3.13 7-7 7z"/></svg>
+      </button>
+    </div>
     <aside id="deviceList"></aside>
   </main>
 </div>
 
 <div id="toast" class="toast hidden"></div>
-
-<div id="notifModal" class="modal-bg hidden">
-  <div class="modal">
-    <div class="dev-top" style="margin-bottom:10px">
-      <strong>Notifikasi Lokasi</strong>
-      <button class="sec" id="closeNotif" type="button">Tutup</button>
-    </div>
-    <div id="notifList"></div>
-  </div>
-</div>
 
 <div id="adminModal" class="modal-bg hidden">
   <div class="modal">
@@ -129,28 +144,14 @@ let me = null;
 let ws = null;
 let map = null;
 let markers = new Map();
-let placeLayers = [];
 let devices = new Map();
-let places = [];
 let notifications = [];
-let trailLayer = null;
+let unreadNotifs = 0;
+let panelMode = "devices";
 let historyLayers = [];
 let historyState = null;
-let trailDeviceId = null;
+let ringingTimers = new Map();
 let toastTimer = null;
-
-function clock(ts) {
-  const d = new Date(ts);
-  return String(d.getHours()).padStart(2, "0") + ":" + String(d.getMinutes()).padStart(2, "0");
-}
-
-function durText(m) {
-  const mins = Math.max(1, Math.round(m || 1));
-  if (mins < 60) return mins + " menit";
-  const h = Math.floor(mins / 60);
-  const r = mins % 60;
-  return r > 0 ? h + "j " + r + "m" : h + " jam";
-}
 
 function esc(s) {
   return String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;" }[c]));
@@ -165,6 +166,42 @@ function ago(ts) {
   const hr = Math.floor(min / 60);
   if (hr < 24) return hr + "j lalu";
   return Math.floor(hr / 24) + "h lalu";
+}
+
+function clock(ts) {
+  const d = new Date(ts);
+  return String(d.getHours()).padStart(2, "0") + ":" + String(d.getMinutes()).padStart(2, "0");
+}
+
+function durText(m) {
+  const mins = Math.max(1, Math.round(m || 1));
+  if (mins < 60) return mins + " menit";
+  const h = Math.floor(mins / 60);
+  const r = mins % 60;
+  return r > 0 ? h + "j " + r + "m" : h + " jam";
+}
+
+function osmTile(lat, lng, z = 16) {
+  const n = Math.pow(2, z);
+  const xf = ((lng + 180) / 360) * n;
+  const lr = (lat * Math.PI) / 180;
+  const yf = ((1 - Math.log(Math.tan(lr) + 1 / Math.cos(lr)) / Math.PI) / 2) * n;
+  return {
+    url: "https://tile.openstreetmap.org/" + z + "/" + Math.floor(xf) + "/" + Math.floor(yf) + ".png",
+    px: Math.max(12, Math.min(88, (xf - Math.floor(xf)) * 100)),
+    py: Math.max(12, Math.min(88, (yf - Math.floor(yf)) * 100))
+  };
+}
+
+function updateNotifBadge() {
+  const el = document.getElementById("notifBadge");
+  if (unreadNotifs > 0) {
+    el.textContent = String(unreadNotifs);
+    el.classList.remove("hidden");
+  } else {
+    el.classList.add("hidden");
+  }
+  document.getElementById("notifBtn").classList.toggle("active", panelMode === "notifs");
 }
 
 function showToast(msg) {
@@ -187,24 +224,18 @@ async function api(path, opts = {}) {
 
 function initMap() {
   if (map) return;
-  map = L.map("map").setView([-6.8, 110.84], 12);
+  map = L.map("map").setView([-6.8, 110.84], 13);
   L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
     maxZoom: 19,
     attribution: "&copy; OpenStreetMap"
   }).addTo(map);
 }
 
-function renderPlaces() {
-  if (!map) return;
-  placeLayers.forEach((l) => map.removeLayer(l));
-  placeLayers = [];
-}
-
 function upsertMarker(d) {
   if (d.platform !== "ios" && d.platform !== "android") return;
   devices.set(d.device_id, d);
   const online = Date.now() - (d.last_seen || d.updated_at) < 90000;
-  const col = d.color || "#38bdf8";
+  const col = d.color || "#0284c7";
   const tip = (d.display_name || d.username) + " (" + (d.platform === "ios" ? "iOS" : "Android") + ")";
   const svg = '<svg viewBox="0 0 24 24"><path d="M12 12c2.7 0 5-2.3 5-5s-2.3-5-5-5-5 2.3-5 5 2.3 5 5 5zm0 2c-3.3 0-10 1.7-10 5v3h20v-3c0-3.3-6.7-5-10-5z"/></svg>';
   const icon = L.divIcon({
@@ -218,7 +249,7 @@ function upsertMarker(d) {
   } else {
     markers.set(d.device_id, L.marker([d.lat, d.lng], { icon }).bindTooltip(esc(tip)).addTo(map));
   }
-  renderDevices();
+  renderPanel();
 }
 
 function removeDevice(deviceId) {
@@ -227,33 +258,49 @@ function removeDevice(deviceId) {
     map.removeLayer(markers.get(deviceId));
     markers.delete(deviceId);
   }
-  if (trailDeviceId === deviceId && trailLayer) {
-    map.removeLayer(trailLayer);
-    trailLayer = null;
-    trailDeviceId = null;
-  }
-  renderDevices();
+  renderPanel();
 }
 
-function renderDevices() {
+function renderPanel() {
   const list = document.getElementById("deviceList");
-  if (historyState) {
+  updateNotifBadge();
+
+  if (panelMode === "history" && historyState) {
     const segs = historyState.data.segments || [];
     const header = '<div class="dev"><div class="dev-top"><span class="dev-name">History · ' + esc(historyState.label) + '</span>' +
       '<button class="sec" type="button" onclick="closeHistory()">Tutup</button></div>' +
       '<div class="meta">Total perjalanan: <strong>' + historyState.data.total_distance_km + ' km</strong></div>' +
       '<div class="dev-btns">' +
-      [1, 3, 7].map((d) => '<button type="button" class="' + (historyState.days === d ? "" : "sec") + '" onclick="openHistory(\\'' + esc(historyState.id) + '\\',' + d + ')">' + (d === 1 ? "24 Jam" : d + " Hari") + '</button>').join("") +
+      [1, 3, 7].map((d) => '<button type="button" class="' + (historyState.days === d ? "green" : "sec") + '" onclick="openHistory(\\'' + esc(historyState.id) + '\\',' + d + ',\\'' + esc(historyState.label) + '\\')">' + (d === 1 ? "24 Jam" : d + " Hari") + '</button>').join("") +
       '</div></div>';
     const body = !segs.length
       ? '<div class="meta">Belum ada rekaman perjalanan.</div>'
       : segs.map((s) => s.type === "stay"
         ? '<div class="dev" style="cursor:pointer" onclick="map.setView([' + s.lat + ',' + s.lng + '],17)"><div class="dev-top"><span class="dev-name">' + esc(s.label) + '</span><span class="badge">SINGGAH</span></div><div class="meta">' + clock(s.start_at) + " – " + clock(s.end_at) + " · " + durText(s.duration_min) + '</div></div>'
-        : '<div class="dev" style="border-color:#22c55e;background:#0f2419;cursor:pointer" onclick="map.setView([' + s.end_lat + ',' + s.end_lng + '],16)"><div class="dev-top"><span class="dev-name" style="color:#4ade80">Jalan · ' + s.distance_km + ' km</span><span class="badge android">' + durText(s.duration_min) + '</span></div><div class="meta">' + clock(s.start_at) + " – " + clock(s.end_at) + '<br>Dari: ' + esc(s.from_label) + '<br>Ke: ' + esc(s.to_label) + '</div></div>'
+        : '<div class="dev" style="border-color:#22c55e;background:#f0fdf4;cursor:pointer" onclick="map.setView([' + s.end_lat + ',' + s.end_lng + '],16)"><div class="dev-top"><span class="dev-name" style="color:#15803d">Jalan · ' + s.distance_km + ' km</span><span class="badge android">' + durText(s.duration_min) + '</span></div><div class="meta">' + clock(s.start_at) + " – " + clock(s.end_at) + '<br>Dari: ' + esc(s.from_label) + '<br>Ke: ' + esc(s.to_label) + '</div></div>'
       ).join("");
     list.innerHTML = header + body;
     return;
   }
+
+  if (panelMode === "notifs") {
+    const header = '<div class="dev"><div class="dev-top"><span class="dev-name">Notifikasi Lokasi</span><button class="sec" type="button" onclick="closeNotifs()">Tutup</button></div><div class="meta">Ketuk notifikasi untuk melihat rute perjalanan user.</div></div>';
+    const body = !notifications.length
+      ? '<div class="meta">Belum ada notifikasi pergi/sampai.</div>'
+      : notifications.map((n) => {
+          const hasCoord = typeof n.lat === "number" && typeof n.lng === "number";
+          const tile = hasCoord ? osmTile(n.lat, n.lng, 16) : null;
+          const preview = tile
+            ? '<div class="mini-map"><img src="' + tile.url + '" alt="" /><span class="mini-pin" style="left:' + tile.px + '%;top:' + tile.py + '%;background:' + esc(n.color || "#0284c7") + '"></span></div>'
+            : '<div class="mini-map"></div>';
+          return '<div class="dev notif-card" onclick="openHistory(\\'' + esc(n.device_id) + '\\',1,\\'' + esc(n.display_name || n.username) + '\\')">' +
+            preview +
+            '<div><div class="dev-name">' + esc(n.message) + '</div><div class="meta">' + ago(n.created_at) + ' · Lihat rute →</div></div></div>';
+        }).join("");
+    list.innerHTML = header + body;
+    return;
+  }
+
   const arr = Array.from(devices.values()).sort((a, b) => b.updated_at - a.updated_at);
   if (!arr.length) {
     list.innerHTML = '<div class="meta">Belum ada perangkat Android/iOS aktif. Mode Web hanya untuk memantau.</div>';
@@ -265,28 +312,20 @@ function renderDevices() {
     const acc = d.accuracy != null ? Math.round(d.accuracy) + "m" : "-";
     const pLabel = d.platform === "ios" ? "iOS" : "Android";
     const placeTxt = d.current_place ? " · Di " + esc(d.current_place) : "";
+    const isRinging = ringingTimers.has(d.device_id);
     return '<div class="dev">' +
-      '<div class="dev-top"><span class="dev-name"><span class="color-dot" style="background:' + esc(d.color || "#38bdf8") + '"></span>' + esc(d.display_name || d.username) + '</span><span class="badge ' + esc(d.platform) + '">' + pLabel + '</span></div>' +
+      '<div class="dev-top"><span class="dev-name"><span class="color-dot" style="background:' + esc(d.color || "#0284c7") + '"></span>' + esc(d.display_name || d.username) + '</span><span class="badge ' + esc(d.platform) + '">' + pLabel + '</span></div>' +
       '<div class="meta">' + esc(d.device_name) + placeTxt + '<br>' +
       (online ? "● Online" : "○ Offline") + " · " + ago(d.updated_at) + " · Baterai " + bat + " · Akurasi " + acc + '</div>' +
       '<div class="dev-btns">' +
       '<button type="button" onclick="focusDev(\\'' + esc(d.device_id) + '\\')">Fokus</button>' +
       '<button class="sec" type="button" onclick="openRoute(' + d.lat + ',' + d.lng + ')">Rute</button>' +
-      '<button class="sec" type="button" onclick="pingDev(\\'' + esc(d.device_id) + '\\')">Bunyikan</button>' +
-      '<button style="background:#22c55e;color:#0b1220" type="button" onclick="openHistory(\\'' + esc(d.device_id) + '\\',1)">History</button>' +
+      (isRinging
+        ? '<button class="danger" type="button" onclick="stopPingDev(\\'' + esc(d.device_id) + '\\')">Hentikan</button>'
+        : '<button class="sec" type="button" onclick="pingDev(\\'' + esc(d.device_id) + '\\')">Bunyikan</button>') +
+      '<button class="green" type="button" onclick="openHistory(\\'' + esc(d.device_id) + '\\',1,\\'' + esc(d.display_name || d.username) + '\\')">History</button>' +
       '</div></div>';
   }).join("");
-}
-
-function renderNotifs() {
-  const el = document.getElementById("notifList");
-  if (!notifications.length) {
-    el.innerHTML = '<div class="meta">Belum ada notifikasi lokasi.</div>';
-    return;
-  }
-  el.innerHTML = notifications.map((n) =>
-    '<div class="user-row"><div><div><strong>' + esc(n.message) + '</strong></div><div class="meta">' + ago(n.created_at) + '</div></div></div>'
-  ).join("");
 }
 
 window.focusDev = (id) => {
@@ -296,18 +335,24 @@ window.focusDev = (id) => {
 window.openRoute = (lat, lng) => {
   window.open("https://www.google.com/maps/dir/?api=1&destination=" + lat + "," + lng, "_blank");
 };
+window.closeNotifs = () => {
+  panelMode = "devices";
+  renderPanel();
+};
 window.closeHistory = () => {
   historyLayers.forEach((l) => map.removeLayer(l));
   historyLayers = [];
   historyState = null;
-  renderDevices();
+  panelMode = "devices";
+  renderPanel();
 };
-window.openHistory = async (id, days = 1) => {
+window.openHistory = async (id, days = 1, label = "") => {
   historyLayers.forEach((l) => map.removeLayer(l));
   historyLayers = [];
   const d = devices.get(id);
   const data = await api("/api/locations/" + encodeURIComponent(id) + "/history?days=" + days);
-  historyState = { id, days, label: d ? (d.display_name || d.username) : id, data };
+  historyState = { id, days, label: label || (d ? (d.display_name || d.username) : id), data };
+  panelMode = "history";
   const latlngs = (data.points || []).map((p) => [p.lat, p.lng]);
   if (latlngs.length >= 2) {
     historyLayers.push(
@@ -316,11 +361,20 @@ window.openHistory = async (id, days = 1) => {
     );
     map.fitBounds(latlngs, { padding: [36, 36] });
   }
-  renderDevices();
+  renderPanel();
 };
 window.pingDev = async (id) => {
   await api("/api/locations/" + encodeURIComponent(id) + "/ping", { method: "POST" });
-  showToast("Sinyal bunyikan dikirim");
+  if (ringingTimers.has(id)) clearTimeout(ringingTimers.get(id));
+  ringingTimers.set(id, setTimeout(() => { ringingTimers.delete(id); renderPanel(); }, 30000));
+  showToast("HP sedang dibunyikan (maks 30 detik)");
+  renderPanel();
+};
+window.stopPingDev = async (id) => {
+  await api("/api/locations/" + encodeURIComponent(id) + "/stop-ping", { method: "POST" });
+  if (ringingTimers.has(id)) { clearTimeout(ringingTimers.get(id)); ringingTimers.delete(id); }
+  showToast("Suara & getaran dihentikan");
+  renderPanel();
 };
 
 function connectWs() {
@@ -337,21 +391,25 @@ function connectWs() {
     if (msg.type === "snapshot") {
       for (const id of Array.from(devices.keys())) removeDevice(id);
       (msg.devices || []).forEach(upsertMarker);
-      if (Array.isArray(msg.places)) { places = msg.places; renderPlaces(); }
-      if (Array.isArray(msg.notifications)) { notifications = msg.notifications; renderNotifs(); }
+      if (Array.isArray(msg.notifications)) notifications = msg.notifications;
       if (msg.devices && msg.devices.length) map.setView([msg.devices[0].lat, msg.devices[0].lng], 15);
+      renderPanel();
     } else if (msg.type === "location") {
       upsertMarker(msg.device);
     } else if (msg.type === "device_removed") {
       removeDevice(msg.device_id);
-    } else if (msg.type === "places") {
-      places = msg.places || [];
-      renderPlaces();
     } else if (msg.type === "notification" && msg.notification) {
       notifications.unshift(msg.notification);
       notifications = notifications.slice(0, 50);
-      renderNotifs();
+      if (panelMode !== "notifs") unreadNotifs += 1;
       showToast(msg.notification.message);
+      renderPanel();
+    } else if (msg.type === "stop_ring" && msg.target_device_id) {
+      if (ringingTimers.has(msg.target_device_id)) {
+        clearTimeout(ringingTimers.get(msg.target_device_id));
+        ringingTimers.delete(msg.target_device_id);
+        renderPanel();
+      }
     }
   };
 }
@@ -361,7 +419,7 @@ async function enterApp() {
   me = user;
   document.getElementById("loginView").classList.add("hidden");
   document.getElementById("appView").classList.remove("hidden");
-  document.getElementById("meLabel").textContent = (user.display_name || user.username) + " (Pantau Web)";
+  document.getElementById("meLabel").textContent = user.display_name || user.username;
   document.getElementById("adminBtn").classList.toggle("hidden", user.role !== "admin");
   initMap();
   setTimeout(() => map.invalidateSize(), 100);
@@ -386,6 +444,7 @@ document.getElementById("loginForm").onsubmit = async (e) => {
 };
 
 document.getElementById("logoutBtn").onclick = async () => {
+  if (!confirm("Yakin ingin keluar dari akun ini?")) return;
   try { await api("/api/auth/logout", { method: "POST" }); } catch {}
   token = "";
   localStorage.removeItem(LS_TOKEN);
@@ -394,11 +453,26 @@ document.getElementById("logoutBtn").onclick = async () => {
 };
 
 document.getElementById("notifBtn").onclick = () => {
-  renderNotifs();
-  document.getElementById("notifModal").classList.remove("hidden");
+  if (panelMode === "notifs") {
+    panelMode = "devices";
+  } else {
+    panelMode = "notifs";
+    unreadNotifs = 0;
+  }
+  renderPanel();
 };
-document.getElementById("closeNotif").onclick = () => {
-  document.getElementById("notifModal").classList.add("hidden");
+
+document.getElementById("myLocBtn").onclick = () => {
+  if (navigator.geolocation) {
+    navigator.geolocation.getCurrentPosition(
+      (pos) => map && map.setView([pos.coords.latitude, pos.coords.longitude], 17),
+      () => {
+        const first = Array.from(devices.values())[0];
+        if (first && map) map.setView([first.lat, first.lng], 17);
+      },
+      { enableHighAccuracy: true, timeout: 6000 }
+    );
+  }
 };
 
 function resetUserForm() {
@@ -417,7 +491,7 @@ function resetUserForm() {
 async function loadUsers() {
   const { users } = await api("/api/users");
   document.getElementById("usersList").innerHTML = users.map((u) =>
-    '<div class="user-row"><div><span class="color-dot" style="background:' + esc(u.color || "#38bdf8") + '"></span><strong>' + esc(u.display_name || u.username) + '</strong> <span class="meta">(@' + esc(u.username) + ' · ' + esc(u.role) + (u.logged_in ? ' · aktif' : '') + ')</span></div>' +
+    '<div class="user-row"><div><span class="color-dot" style="background:' + esc(u.color || "#0284c7") + '"></span><strong>' + esc(u.display_name || u.username) + '</strong> <span class="meta">(@' + esc(u.username) + ' · ' + esc(u.role) + (u.logged_in ? ' · aktif' : '') + ')</span></div>' +
     '<div style="display:flex;gap:5px"><button class="sec" type="button" onclick="editUser(\\'' + esc(u.username) + '\\',\\'' + esc(u.display_name || u.username) + '\\',\\'' + esc(u.role) + '\\')">Edit</button>' +
     '<button class="sec" type="button" onclick="logoutUser(\\'' + esc(u.username) + '\\')">Logout</button>' +
     (u.username === me.username ? "" : '<button class="danger" type="button" onclick="delUser(\\'' + esc(u.username) + '\\')">Hapus</button>') +
@@ -431,7 +505,6 @@ window.logoutUser = async (u) => {
   showToast("User @" + u + " telah di-logout");
   await loadUsers();
 };
-
 window.editUser = (u, n, r) => {
   document.getElementById("editOriginalU").value = u;
   document.getElementById("newU").value = u;
@@ -443,7 +516,6 @@ window.editUser = (u, n, r) => {
   document.getElementById("saveUserBtn").textContent = "Simpan Perubahan";
   document.getElementById("cancelEditBtn").classList.remove("hidden");
 };
-
 window.delUser = async (u) => {
   if (!confirm("Hapus user @" + u + "?")) return;
   await api("/api/users/" + encodeURIComponent(u), { method: "DELETE" });
@@ -457,11 +529,9 @@ document.getElementById("adminBtn").onclick = async () => {
 };
 document.getElementById("closeAdmin").onclick = () => document.getElementById("adminModal").classList.add("hidden");
 document.getElementById("cancelEditBtn").onclick = resetUserForm;
-
 document.getElementById("newU").oninput = (e) => {
   e.target.value = e.target.value.toLowerCase().replace(/[^a-z]/g, "");
 };
-
 document.getElementById("userForm").onsubmit = async (e) => {
   e.preventDefault();
   const err = document.getElementById("adminErr");
@@ -478,7 +548,7 @@ document.getElementById("userForm").onsubmit = async (e) => {
       const res = await api("/api/users/" + encodeURIComponent(orig), { method: "PATCH", body: JSON.stringify(payload) });
       if (orig === me.username) {
         me = res.user;
-        document.getElementById("meLabel").textContent = (me.display_name || me.username) + " (Pantau Web)";
+        document.getElementById("meLabel").textContent = me.display_name || me.username;
       }
     } else {
       await api("/api/users", { method: "POST", body: JSON.stringify(payload) });
@@ -490,7 +560,7 @@ document.getElementById("userForm").onsubmit = async (e) => {
   }
 };
 
-setInterval(renderDevices, 10000);
+setInterval(renderPanel, 10000);
 if (token) enterApp().catch(() => { token = ""; localStorage.removeItem(LS_TOKEN); });
 </script>
 </body>

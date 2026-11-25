@@ -275,6 +275,8 @@ export class LocationHubCore {
         platform TEXT NOT NULL,
         place_id INTEGER,
         place_name TEXT NOT NULL,
+        lat REAL,
+        lng REAL,
         message TEXT NOT NULL,
         created_at INTEGER NOT NULL
       );
@@ -311,6 +313,15 @@ export class LocationHubCore {
     }
     if (!locCols.has("session_token")) {
       this.sql.exec("ALTER TABLE locations ADD COLUMN session_token TEXT");
+    }
+    const notifCols = new Set(
+      this.sql.exec("PRAGMA table_info(notifications)").toArray().map((c) => c.name)
+    );
+    if (!notifCols.has("lat")) {
+      this.sql.exec("ALTER TABLE notifications ADD COLUMN lat REAL");
+    }
+    if (!notifCols.has("lng")) {
+      this.sql.exec("ALTER TABLE notifications ADD COLUMN lng REAL");
     }
     this.sql.exec("DELETE FROM locations WHERE platform = 'web'");
   }
@@ -448,13 +459,19 @@ export class LocationHubCore {
   }
 
   listNotifications() {
-    return this.sql.exec(
-      `SELECT id, event_type, device_id, username, display_name, platform, place_id, place_name, message, created_at
-       FROM notifications
-       ORDER BY created_at DESC
+    const rows = this.sql.exec(
+      `SELECT n.id, n.event_type, n.device_id, n.username, n.display_name, n.platform,
+              n.place_id, n.place_name,
+              COALESCE(n.lat, p.lat) AS lat,
+              COALESCE(n.lng, p.lng) AS lng,
+              n.message, n.created_at
+       FROM notifications n
+       LEFT JOIN places p ON p.id = n.place_id
+       ORDER BY n.created_at DESC
        LIMIT ?`,
       NOTIF_LIMIT
     ).toArray();
+    return rows.map((r) => ({ ...r, color: userColor(r.username) }));
   }
 
   emitGeofenceNotification(eventType, device, place) {
@@ -466,8 +483,8 @@ export class LocationHubCore {
     const now = Date.now();
     this.sql.exec(
       `INSERT INTO notifications (
-        event_type, device_id, username, display_name, platform, place_id, place_name, message, created_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        event_type, device_id, username, display_name, platform, place_id, place_name, lat, lng, message, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       eventType,
       device.device_id,
       device.username,
@@ -475,11 +492,13 @@ export class LocationHubCore {
       device.platform,
       place.id,
       place.name,
+      place.lat,
+      place.lng,
       message,
       now
     );
     const created = this.sql.exec(
-      `SELECT id, event_type, device_id, username, display_name, platform, place_id, place_name, message, created_at
+      `SELECT id, event_type, device_id, username, display_name, platform, place_id, place_name, lat, lng, message, created_at
        FROM notifications
        ORDER BY id DESC LIMIT 1`
     ).toArray()[0];
@@ -490,6 +509,7 @@ export class LocationHubCore {
       NOTIF_LIMIT
     );
     if (created) {
+      created.color = userColor(created.username);
       this.broadcast({ type: "notification", notification: created });
     }
     return created;
@@ -1114,6 +1134,24 @@ export class LocationHubCore {
         target_username: exists[0].username,
         from_username: user.username,
         from_display_name: user.display_name,
+        at: Date.now(),
+      });
+      return json({ ok: true });
+    }
+
+    const stopPingMatch = path.match(/^\/api\/locations\/([^/]+)\/stop-ping$/);
+    if (stopPingMatch && request.method === "POST") {
+      const deviceId = decodeURIComponent(stopPingMatch[1]);
+      const exists = this.sql.exec(
+        "SELECT device_id, username FROM locations WHERE device_id = ?",
+        deviceId
+      ).toArray();
+      if (!exists.length) return json({ error: "Perangkat tidak ditemukan" }, 404);
+      this.broadcast({
+        type: "stop_ring",
+        target_device_id: deviceId,
+        target_username: exists[0].username,
+        from_username: user.username,
         at: Date.now(),
       });
       return json({ ok: true });

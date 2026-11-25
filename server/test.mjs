@@ -116,6 +116,8 @@ assert.equal(res.status, 200);
 const notifs1 = events.filter((e) => e.type === "notification");
 assert.equal(notifs1.length, 1);
 assert.equal(notifs1[0].notification.message, "Lucky Frediyanto - Android Telah sampai di Rumah");
+assert.equal(notifs1[0].notification.lat, -6.8);
+assert.equal(notifs1[0].notification.lng, 110.84);
 
 res = await hub.handleApi(req("/api/location", {
   method: "POST",
@@ -284,6 +286,13 @@ res = await hub.handleApi(req("/api/location", {
   body: { device_id: "hp2", platform: "ios", device_name: "iPhone", lat: -6.81, lng: 110.85 },
 }));
 assert.equal(res.status, 200);
+
+res = await hub.handleApi(req("/api/locations/lucky%3Ahp2/stop-ping", {
+  method: "POST",
+  token: freshAdmin.token,
+}));
+assert.equal(res.status, 200);
+assert.equal(events[events.length - 1].type, "stop_ring");
 
 res = await hub.handleApi(req("/api/users/lucky/logout", {
   method: "POST",

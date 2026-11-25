@@ -5,15 +5,15 @@ export const MAP_HTML = `<!doctype html>
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no" />
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
 <style>
-  html,body,#map { margin:0; padding:0; width:100%; height:100%; background:#0f172a; }
+  html,body,#map { margin:0; padding:0; width:100%; height:100%; background:#e2e8f0; }
   .user-pin {
     width:36px; height:36px; border-radius:50%; border:3px solid #fff;
     display:flex; align-items:center; justify-content:center;
-    box-shadow:0 3px 10px rgba(0,0,0,.55); position:relative;
+    box-shadow:0 3px 10px rgba(15,23,42,.35); position:relative;
   }
   .user-pin svg { width:20px; height:20px; fill:#fff; }
   .user-pin .st {
-    width:11px; height:11px; border-radius:50%; border:2px solid #0f172a;
+    width:11px; height:11px; border-radius:50%; border:2px solid #fff;
     position:absolute; right:-2px; bottom:-2px; background:#22c55e;
   }
   .user-pin .st.old { background:#94a3b8; }

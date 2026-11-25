@@ -4,8 +4,11 @@ import * as Notifications from "expo-notifications";
 import * as Haptics from "expo-haptics";
 import { VolumeManager, RINGER_MODE } from "react-native-volume-manager";
 
+const MAX_RING_MS = 30000;
+
 let activeSound = null;
 let hapticTimer = null;
+let autoStopTimer = null;
 let activeNotifId = null;
 
 async function forceMaxVolume() {
@@ -26,7 +29,7 @@ async function forceMaxVolume() {
   } catch {}
 }
 
-export async function startLoudRing(callerName) {
+export async function startLoudRing(callerName, onAutoStop = null) {
   await stopLoudRing();
   await forceMaxVolume();
 
@@ -57,6 +60,11 @@ export async function startLoudRing(callerName) {
     Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error).catch(() => {});
   }, 1500);
 
+  autoStopTimer = setTimeout(async () => {
+    await stopLoudRing();
+    if (typeof onAutoStop === "function") onAutoStop();
+  }, MAX_RING_MS);
+
   try {
     activeNotifId = await Notifications.scheduleNotificationAsync({
       content: {
@@ -72,6 +80,10 @@ export async function startLoudRing(callerName) {
 }
 
 export async function stopLoudRing() {
+  if (autoStopTimer) {
+    clearTimeout(autoStopTimer);
+    autoStopTimer = null;
+  }
   if (hapticTimer) {
     clearInterval(hapticTimer);
     hapticTimer = null;
