@@ -12,7 +12,8 @@ const PBKDF2_ITERATIONS = 100000;
 const USERNAME_RE = /^[a-z]{2,32}$/;
 const DEVICE_ID_RE = /^[a-zA-Z0-9._:-]{2,80}$/;
 const MOBILE_PLATFORMS = new Set(["ios", "android"]);
-const ALLOWED_RADII = new Set([20, 50, 100, 200]);
+const MIN_RADIUS_M = 20;
+const MAX_RADIUS_M = 5000;
 const USER_COLORS = [
   "#38bdf8", "#22c55e", "#f59e0b", "#ec4899",
   "#a855f7", "#ef4444", "#14b8a6", "#f97316",
@@ -258,7 +259,7 @@ export class LocationHubCore {
         name TEXT NOT NULL,
         lat REAL NOT NULL,
         lng REAL NOT NULL,
-        radius INTEGER NOT NULL CHECK(radius IN (20, 50, 100, 200)),
+        radius INTEGER NOT NULL,
         created_by TEXT NOT NULL,
         created_at INTEGER NOT NULL
       );
@@ -296,6 +297,9 @@ export class LocationHubCore {
     );
     if (!userCols.has("display_name")) {
       this.sql.exec("ALTER TABLE users ADD COLUMN display_name TEXT NOT NULL DEFAULT ''");
+    }
+    if (!userCols.has("photo")) {
+      this.sql.exec("ALTER TABLE users ADD COLUMN photo TEXT");
     }
     this.sql.exec(
       "UPDATE users SET display_name = CASE WHEN username = 'admin' THEN 'Admin' ELSE username END WHERE display_name = '' OR display_name IS NULL"
@@ -367,7 +371,7 @@ export class LocationHubCore {
     if (typeof token !== "string" || token.length < 32) return null;
     const now = Date.now();
     const rows = this.sql.exec(
-      `SELECT s.token, s.username, s.expires_at, u.display_name, u.role
+      `SELECT s.token, s.username, s.expires_at, u.display_name, u.photo, u.role
        FROM sessions s
        JOIN users u ON u.username = s.username
        WHERE s.token = ?`,
@@ -384,6 +388,7 @@ export class LocationHubCore {
       token: row.token,
       username: row.username,
       display_name: row.display_name || row.username,
+      photo: row.photo || null,
       role: row.role,
     };
   }
@@ -426,7 +431,7 @@ export class LocationHubCore {
     this.purgeExpiredSessionsAndDevices();
     const now = Date.now();
     const rows = this.sql.exec(
-      `SELECT l.device_id, l.username, u.display_name, l.platform, l.device_name,
+      `SELECT l.device_id, l.username, u.display_name, u.photo, l.platform, l.device_name,
               l.lat, l.lng, l.accuracy, l.altitude, l.speed, l.heading,
               l.battery, l.charging, l.updated_at, l.last_seen,
               dps.place_name AS current_place
@@ -448,6 +453,7 @@ export class LocationHubCore {
       return {
         ...r,
         display_name: r.display_name || r.username,
+        photo: r.photo || null,
         color: userColor(r.username),
         last_seen: seen,
         online: now - seen < ONLINE_WINDOW_MS,
@@ -463,18 +469,23 @@ export class LocationHubCore {
 
   listNotifications() {
     const rows = this.sql.exec(
-      `SELECT n.id, n.event_type, n.device_id, n.username, n.display_name, n.platform,
+      `SELECT n.id, n.event_type, n.device_id, n.username, n.display_name, u.photo, n.platform,
               n.place_id, n.place_name,
               COALESCE(n.lat, p.lat) AS lat,
               COALESCE(n.lng, p.lng) AS lng,
               n.message, n.created_at
        FROM notifications n
        LEFT JOIN places p ON p.id = n.place_id
+       LEFT JOIN users u ON u.username = n.username
        ORDER BY n.created_at DESC
        LIMIT ?`,
       NOTIF_LIMIT
     ).toArray();
-    return rows.map((r) => ({ ...r, color: userColor(r.username) }));
+    return rows.map((r) => ({
+      ...r,
+      photo: r.photo || null,
+      color: userColor(r.username),
+    }));
   }
 
   emitGeofenceNotification(eventType, device, place) {
@@ -733,6 +744,7 @@ export class LocationHubCore {
       device_id: deviceId,
       username: user.username,
       display_name: user.display_name,
+      photo: user.photo || null,
       color: userColor(user.username),
       platform,
       device_name: deviceName,
@@ -1016,7 +1028,7 @@ export class LocationHubCore {
         return json({ error: "Terlalu banyak percobaan login, coba lagi 15 menit" }, 429);
       }
       const rows = this.sql.exec(
-        "SELECT username, display_name, password_hash, role FROM users WHERE username = ?",
+        "SELECT username, display_name, photo, password_hash, role FROM users WHERE username = ?",
         rawUser
       ).toArray();
       if (!rows.length || !(await verifyPassword(password, rows[0].password_hash))) {
@@ -1065,6 +1077,7 @@ export class LocationHubCore {
         user: {
           username: rows[0].username,
           display_name: rows[0].display_name || rows[0].username,
+          photo: rows[0].photo || null,
           color: userColor(rows[0].username),
           role: rows[0].role,
         },
@@ -1077,7 +1090,13 @@ export class LocationHubCore {
 
     if (path === "/api/auth/me" && request.method === "GET") {
       return json({
-        user: { username: user.username, display_name: user.display_name, role: user.role },
+        user: {
+          username: user.username,
+          display_name: user.display_name,
+          photo: user.photo || null,
+          color: userColor(user.username),
+          role: user.role,
+        },
       });
     }
 
@@ -1233,9 +1252,9 @@ export class LocationHubCore {
       const lat = finiteNumber(body.lat, -90, 90);
       const lng = finiteNumber(body.lng, -180, 180);
       if (lat === null || lng === null) return json({ error: "Koordinat lokasi tidak valid" }, 400);
-      const radius = Number(body.radius ?? 50);
-      if (!ALLOWED_RADII.has(radius)) {
-        return json({ error: "Radius harus salah satu dari 20, 50, 100, atau 200 meter" }, 400);
+      const radius = Math.round(Number(body.radius ?? 50));
+      if (!Number.isFinite(radius) || radius < MIN_RADIUS_M || radius > MAX_RADIUS_M) {
+        return json({ error: `Radius harus berupa angka antara ${MIN_RADIUS_M}m sampai ${MAX_RADIUS_M}m` }, 400);
       }
       const now = Date.now();
       this.sql.exec(
@@ -1265,9 +1284,9 @@ export class LocationHubCore {
       const lat = body.lat !== undefined ? finiteNumber(body.lat, -90, 90) : existing.lat;
       const lng = body.lng !== undefined ? finiteNumber(body.lng, -180, 180) : existing.lng;
       if (lat === null || lng === null) return json({ error: "Koordinat lokasi tidak valid" }, 400);
-      const radius = body.radius !== undefined ? Number(body.radius) : existing.radius;
-      if (!ALLOWED_RADII.has(radius)) {
-        return json({ error: "Radius harus 20, 50, 100, atau 200 meter" }, 400);
+      const radius = body.radius !== undefined ? Math.round(Number(body.radius)) : existing.radius;
+      if (!Number.isFinite(radius) || radius < MIN_RADIUS_M || radius > MAX_RADIUS_M) {
+        return json({ error: `Radius harus berupa angka antara ${MIN_RADIUS_M}m sampai ${MAX_RADIUS_M}m` }, 400);
       }
       this.sql.exec(
         "UPDATE places SET name = ?, lat = ?, lng = ?, radius = ? WHERE id = ?",
@@ -1301,13 +1320,14 @@ export class LocationHubCore {
       if (user.role !== "admin") return json({ error: "Khusus admin" }, 403);
       const now = Date.now();
       const users = this.sql.exec(
-        `SELECT u.username, u.display_name, u.role, u.created_at,
+        `SELECT u.username, u.display_name, u.photo, u.role, u.created_at,
                 EXISTS(SELECT 1 FROM sessions s WHERE s.username = u.username AND s.expires_at > ?) AS has_session
          FROM users u
          ORDER BY u.created_at ASC`,
         now
       ).toArray().map((u) => ({
         ...u,
+        photo: u.photo || null,
         color: userColor(u.username),
         logged_in: Boolean(u.has_session),
       }));
@@ -1350,12 +1370,13 @@ export class LocationHubCore {
       const exists = this.sql.exec("SELECT username FROM users WHERE username = ?", username).toArray();
       if (exists.length) return json({ error: "Username sudah terdaftar" }, 409);
       const hash = await hashPassword(body.password);
+      const photo = typeof body.photo === "string" && body.photo.startsWith("data:image/") ? body.photo : null;
       const now = Date.now();
       this.sql.exec(
-        "INSERT INTO users (username, display_name, password_hash, role, created_at) VALUES (?, ?, ?, ?, ?)",
-        username, displayName, hash, role, now
+        "INSERT INTO users (username, display_name, photo, password_hash, role, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+        username, displayName, photo, hash, role, now
       );
-      return json({ ok: true, user: { username, display_name: displayName, role, created_at: now } }, 201);
+      return json({ ok: true, user: { username, display_name: displayName, photo, role, created_at: now } }, 201);
     }
 
     const userItemMatch = path.match(/^\/api\/users\/([^/]+)$/);
@@ -1391,6 +1412,14 @@ export class LocationHubCore {
         return json({ error: "Admin tidak bisa menurunkan role dirinya sendiri" }, 400);
       }
 
+      const oldPhoto = this.sql.exec("SELECT photo FROM users WHERE username = ?", oldUsername).toArray()[0]?.photo || null;
+      let nextPhoto = oldPhoto;
+      if (body.photo === null || body.photo === "") {
+        nextPhoto = null;
+      } else if (typeof body.photo === "string" && body.photo.startsWith("data:image/")) {
+        nextPhoto = body.photo;
+      }
+
       let newHash = null;
       if (typeof body.password === "string" && body.password.length > 0) {
         if (!validPassword(body.password)) {
@@ -1401,13 +1430,13 @@ export class LocationHubCore {
 
       if (newHash) {
         this.sql.exec(
-          "UPDATE users SET username = ?, display_name = ?, role = ?, password_hash = ? WHERE username = ?",
-          nextUsername, nextDisplayName, nextRole, newHash, existing.username
+          "UPDATE users SET username = ?, display_name = ?, photo = ?, role = ?, password_hash = ? WHERE username = ?",
+          nextUsername, nextDisplayName, nextPhoto, nextRole, newHash, existing.username
         );
       } else {
         this.sql.exec(
-          "UPDATE users SET username = ?, display_name = ?, role = ? WHERE username = ?",
-          nextUsername, nextDisplayName, nextRole, existing.username
+          "UPDATE users SET username = ?, display_name = ?, photo = ?, role = ? WHERE username = ?",
+          nextUsername, nextDisplayName, nextPhoto, nextRole, existing.username
         );
       }
 
@@ -1451,7 +1480,7 @@ export class LocationHubCore {
 
       return json({
         ok: true,
-        user: { username: nextUsername, display_name: nextDisplayName, role: nextRole },
+        user: { username: nextUsername, display_name: nextDisplayName, photo: nextPhoto, role: nextRole },
       });
     }
 

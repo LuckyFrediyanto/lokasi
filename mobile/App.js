@@ -2,9 +2,12 @@ import React, { useEffect, useRef, useState } from "react";
 import {
   ActivityIndicator,
   Alert,
+  Animated,
+  Dimensions,
   Image,
   Linking,
   Modal,
+  PanResponder,
   Platform,
   ScrollView,
   StatusBar as RNStatusBar,
@@ -22,6 +25,8 @@ import * as Updates from "expo-updates";
 import * as Notifications from "expo-notifications";
 import * as SecureStore from "expo-secure-store";
 import * as IntentLauncher from "expo-intent-launcher";
+import * as ImagePicker from "expo-image-picker";
+import * as ImageManipulator from "expo-image-manipulator";
 import { WebView } from "react-native-webview";
 import { SERVER_URL, STORE_KEYS, toWsUrl } from "./src/config";
 import { startLoudRing, stopLoudRing } from "./src/alarm";
@@ -42,7 +47,7 @@ import {
 } from "./src/tracking";
 import { MAP_HTML } from "./src/mapHtml";
 
-const RADIUS_OPTIONS = [20, 50, 100, 200];
+const RADIUS_OPTIONS = [50, 100, 200, 300, 400, 500];
 
 Notifications.setNotificationHandler({
   handleNotification: async () => ({
@@ -203,8 +208,50 @@ function AppInner() {
   const [formUsername, setFormUsername] = useState("");
   const [formDisplayName, setFormDisplayName] = useState("");
   const [formPassword, setFormPassword] = useState("");
+  const [formPhoto, setFormPhoto] = useState(null);
   const [formRole, setFormRole] = useState("user");
   const [adminErr, setAdminErr] = useState("");
+
+  const screenH = Dimensions.get("window").height;
+  const sheetMin = 76;
+  const sheetMid = Math.round(screenH * 0.42);
+  const sheetMax = Math.round(screenH - (topInset + 60));
+  const sheetHeight = useRef(new Animated.Value(sheetMid)).current;
+  const currentSheetH = useRef(sheetMid);
+
+  useEffect(() => {
+    const id = sheetHeight.addListener((v) => {
+      currentSheetH.current = v.value;
+    });
+    return () => sheetHeight.removeListener(id);
+  }, [sheetHeight]);
+
+  const panResponder = useRef(
+    PanResponder.create({
+      onStartShouldSetPanResponder: () => true,
+      onMoveShouldSetPanResponder: (_, gesture) => Math.abs(gesture.dy) > 4,
+      onPanResponderMove: (_, gesture) => {
+        const next = Math.max(sheetMin, Math.min(sheetMax, currentSheetH.current - gesture.dy));
+        sheetHeight.setValue(next);
+      },
+      onPanResponderRelease: (_, gesture) => {
+        const target = currentSheetH.current - gesture.dy;
+        let snapTo = sheetMid;
+        if (gesture.vy < -0.5 || target > (sheetMid + sheetMax) / 2) {
+          snapTo = sheetMax;
+        } else if (gesture.vy > 0.5 || target < (sheetMin + sheetMid) / 2) {
+          snapTo = sheetMin;
+        }
+        currentSheetH.current = snapTo;
+        Animated.spring(sheetHeight, {
+          toValue: snapTo,
+          friction: 8,
+          tension: 50,
+          useNativeDriver: false,
+        }).start();
+      },
+    })
+  ).current;
 
   const webRef = useRef(null);
   const wsRef = useRef(null);
@@ -759,6 +806,7 @@ function AppInner() {
     setFormUsername("");
     setFormDisplayName("");
     setFormPassword("");
+    setFormPhoto(null);
     setFormRole("user");
     setAdminErr("");
   }
@@ -779,8 +827,39 @@ function AppInner() {
     setFormUsername(u.username);
     setFormDisplayName(u.display_name || u.username);
     setFormPassword("");
+    setFormPhoto(u.photo || null);
     setFormRole(u.role);
     setAdminErr("");
+  }
+
+  async function pickUserPhoto() {
+    try {
+      const res = await ImagePicker.launchImageLibraryAsync({
+        mediaTypes: ImagePicker.MediaTypeOptions.Images,
+        allowsEditing: true,
+        aspect: [1, 1],
+        quality: 0.7,
+      });
+      if (res.canceled || !res.assets || !res.assets.length) return;
+      const asset = res.assets[0];
+      const manipulated = await ImageManipulator.manipulateAsync(
+        asset.uri,
+        [{ resize: { width: 180, height: 180 } }],
+        { compress: 0.7, format: ImageManipulator.SaveFormat.JPEG, base64: true }
+      );
+      if (manipulated.base64) {
+        setFormPhoto(`data:image/jpeg;base64,${manipulated.base64}`);
+      }
+    } catch (e) {
+      Alert.alert("Foto", e.message || "Gagal memilih foto");
+    }
+  }
+
+  function deleteFormPhoto() {
+    Alert.alert("Hapus Foto", "Foto profil akan dihapus dan kembali ke icon default?", [
+      { text: "Batal", style: "cancel" },
+      { text: "Hapus", style: "destructive", onPress: () => setFormPhoto(null) },
+    ]);
   }
 
   async function saveUserForm() {
@@ -801,7 +880,12 @@ function AppInner() {
     }
     try {
       if (editingUsername) {
-        const payload = { username: uname, display_name: dname, role: formRole };
+        const payload = {
+          username: uname,
+          display_name: dname,
+          role: formRole,
+          photo: formPhoto,
+        };
         if (formPassword.length > 0) payload.password = formPassword;
         const res = await apiRequest(`/api/users/${encodeURIComponent(editingUsername)}`, {
           method: "PATCH",
@@ -820,6 +904,7 @@ function AppInner() {
             username: uname,
             display_name: dname,
             password: formPassword,
+            photo: formPhoto,
             role: formRole,
           },
         });
@@ -1031,20 +1116,6 @@ function AppInner() {
         </View>
       ) : null}
 
-      <View style={styles.bgBar}>
-        <Text style={styles.bgText}>
-          Lacak Latar Belakang ({bgActive ? "AKTIF" : "BUTUH IZIN"})
-        </Text>
-        <View style={styles.row}>
-          {!bgActive ? (
-            <TouchableOpacity style={styles.miniBtnAccent} onPress={ensureBackgroundPermission}>
-              <Text style={styles.chipPrimaryText}>Aktifkan Izin</Text>
-            </TouchableOpacity>
-          ) : null}
-          <Switch value={true} disabled={true} />
-        </View>
-      </View>
-
       <View style={styles.mapWrap}>
         <WebView
           ref={webRef}
@@ -1080,6 +1151,11 @@ function AppInner() {
         </TouchableOpacity>
       </View>
 
+      <Animated.View style={[styles.bottomSheet, { height: sheetHeight }]}>
+        <View {...panResponder.panHandlers} style={styles.sheetHandleArea}>
+          <View style={styles.sheetHandle} />
+        </View>
+
       {panelMode === "places" ? (
         <ScrollView style={styles.list} contentContainerStyle={{ padding: 12, gap: 8 }}>
           <View style={styles.devCard}>
@@ -1104,7 +1180,7 @@ function AppInner() {
               placeholderTextColor="#94a3b8"
             />
 
-            <Text style={styles.label}>Radius Deteksi (disarankan 50m / 100m)</Text>
+            <Text style={styles.label}>Radius Deteksi</Text>
             <View style={styles.devActions}>
               {RADIUS_OPTIONS.map((r) => (
                 <TouchableOpacity
@@ -1120,6 +1196,22 @@ function AppInner() {
               <TouchableOpacity style={styles.chip} onPress={snapPlaceToMyGps}>
                 <Text style={styles.chipText}>Pakai Lokasi Saya</Text>
               </TouchableOpacity>
+            </View>
+
+            <View style={[styles.row, { marginTop: 8 }]}>
+              <Text style={[styles.devMeta, { flexShrink: 0 }]}>Custom Radius (meter):</Text>
+              <TextInput
+                style={[styles.input, { flex: 1, paddingVertical: 6, fontSize: 13 }]}
+                keyboardType="numeric"
+                value={String(placeRadius)}
+                onChangeText={(t) => {
+                  const num = parseInt(t.replace(/[^0-9]/g, ""), 10);
+                  if (!Number.isNaN(num)) setPlaceRadius(num);
+                  else if (t === "") setPlaceRadius(0);
+                }}
+                placeholder="misal 250"
+                placeholderTextColor="#94a3b8"
+              />
             </View>
 
             <Text style={styles.devMeta}>
@@ -1279,43 +1371,64 @@ function AppInner() {
           ) : !historyData || !historyData.segments || historyData.segments.length === 0 ? (
             <Text style={styles.muted}>Belum ada rekaman perjalanan pada rentang waktu ini.</Text>
           ) : (
-            historyData.segments.map((seg, idx) => (
-              <TouchableOpacity
-                key={`${seg.type}-${seg.start_at}-${idx}`}
-                style={[styles.devCard, seg.type === "trip" && styles.tripCard]}
-                onPress={() => focusHistorySegment(seg)}
-              >
-                {seg.type === "stay" ? (
-                  <>
-                    <View style={styles.devHead}>
-                      <Text style={styles.devName}>{seg.label}</Text>
-                      <View style={styles.badgeStay}>
-                        <Text style={styles.badgeTextLight}>SINGGAH</Text>
-                      </View>
-                    </View>
-                    <Text style={styles.devMeta}>
-                      {formatClock(seg.start_at)} – {formatClock(seg.end_at)} · {formatDuration(seg.duration_min)}
-                    </Text>
-                  </>
-                ) : (
-                  <>
-                    <View style={styles.devHead}>
-                      <Text style={styles.tripTitle}>
-                        Jalan · {seg.distance_km} km
-                      </Text>
-                      <View style={styles.badgeTrip}>
-                        <Text style={styles.badgeTextLight}>{formatDuration(seg.duration_min)}</Text>
-                      </View>
-                    </View>
-                    <Text style={styles.devMeta}>
-                      {formatClock(seg.start_at)} – {formatClock(seg.end_at)}
-                    </Text>
-                    <Text style={styles.tripRoute}>Dari: {seg.from_label}</Text>
-                    <Text style={styles.tripRoute}>Ke: {seg.to_label}</Text>
-                  </>
-                )}
-              </TouchableOpacity>
-            ))
+            historyData.segments.map((seg, idx) => {
+              const segCoord = seg.type === "stay"
+                ? { lat: seg.lat, lng: seg.lng }
+                : { lat: seg.end_lat, lng: seg.end_lng };
+              const tile = osmMiniTile(segCoord.lat, segCoord.lng, 16);
+              return (
+                <TouchableOpacity
+                  key={`${seg.type}-${seg.start_at}-${idx}`}
+                  style={[styles.devCard, seg.type === "trip" && styles.tripCard, { flexDirection: "row", gap: 10, alignItems: "center" }]}
+                  onPress={() => focusHistorySegment(seg)}
+                >
+                  <View style={styles.miniMapBox}>
+                    <Image source={{ uri: tile.url }} style={styles.miniMapImg} />
+                    <View
+                      style={[
+                        styles.miniMapPin,
+                        {
+                          left: `${tile.px}%`,
+                          top: `${tile.py}%`,
+                          backgroundColor: seg.type === "stay" ? "#0284c7" : "#16a34a",
+                        },
+                      ]}
+                    />
+                  </View>
+                  <View style={{ flex: 1 }}>
+                    {seg.type === "stay" ? (
+                      <>
+                        <View style={styles.devHead}>
+                          <Text style={styles.devName}>{seg.label}</Text>
+                          <View style={styles.badgeStay}>
+                            <Text style={styles.badgeTextLight}>SINGGAH</Text>
+                          </View>
+                        </View>
+                        <Text style={styles.devMeta}>
+                          {formatClock(seg.start_at)} – {formatClock(seg.end_at)} · {formatDuration(seg.duration_min)}
+                        </Text>
+                      </>
+                    ) : (
+                      <>
+                        <View style={styles.devHead}>
+                          <Text style={styles.tripTitle}>
+                            Jalan · {seg.distance_km} km
+                          </Text>
+                          <View style={styles.badgeTrip}>
+                            <Text style={styles.badgeTextLight}>{formatDuration(seg.duration_min)}</Text>
+                          </View>
+                        </View>
+                        <Text style={styles.devMeta}>
+                          {formatClock(seg.start_at)} – {formatClock(seg.end_at)}
+                        </Text>
+                        <Text style={styles.tripRoute}>Dari: {seg.from_label}</Text>
+                        <Text style={styles.tripRoute}>Ke: {seg.to_label}</Text>
+                      </>
+                    )}
+                  </View>
+                </TouchableOpacity>
+              );
+            })
           )}
         </ScrollView>
       ) : (
@@ -1335,7 +1448,14 @@ function AppInner() {
                 <View key={d.device_id} style={styles.devCard}>
                   <View style={styles.devHead}>
                     <View style={styles.row}>
-                      <View style={[styles.userColorDot, { backgroundColor: d.color || "#0284c7" }]} />
+                      {d.photo ? (
+                        <Image
+                          source={{ uri: d.photo }}
+                          style={[styles.userAvatarSmall, { borderColor: d.color || "#0284c7" }]}
+                        />
+                      ) : (
+                        <View style={[styles.userColorDot, { backgroundColor: d.color || "#0284c7" }]} />
+                      )}
                       <Text style={styles.devName}>{d.display_name || d.username}</Text>
                     </View>
                     <View style={[styles.badge, d.platform === "ios" ? styles.badgeIos : styles.badgeAnd]}>
@@ -1375,11 +1495,12 @@ function AppInner() {
           )}
         </ScrollView>
       )}
+      </Animated.View>
 
       <Modal visible={adminOpen} animationType="slide" onRequestClose={() => setAdminOpen(false)}>
-        <View style={[styles.fullPage, { paddingBottom: bottomInset }]}>
+        <View style={styles.fullPage}>
           <StatusBar style="dark" backgroundColor="#ffffff" translucent />
-          <View style={[styles.header, { paddingTop: topInset + 8 }]}>
+          <View style={[styles.header, { paddingTop: topInset + 4, paddingBottom: 6 }]}>
             <View style={styles.row}>
               <TouchableOpacity style={styles.iconBtn} onPress={() => setAdminOpen(false)}>
                 <Ionicons name="arrow-back" size={20} color="#0f172a" />
@@ -1390,11 +1511,33 @@ function AppInner() {
             </View>
           </View>
 
-          <ScrollView style={{ flex: 1 }} contentContainerStyle={{ padding: 14, gap: 14 }}>
+          <ScrollView style={{ flex: 1 }} contentContainerStyle={{ padding: 12, paddingBottom: bottomInset + 16, gap: 12 }}>
             <View style={styles.devCard}>
               <Text style={styles.devName}>
                 {editingUsername ? `Edit Data @${editingUsername}` : "Tambah User Baru"}
               </Text>
+
+              <View style={[styles.row, { marginTop: 12, alignItems: "center", gap: 12 }]}>
+                {formPhoto ? (
+                  <Image source={{ uri: formPhoto }} style={styles.avatarPreview} />
+                ) : (
+                  <View style={[styles.avatarPlaceholder, { backgroundColor: "#e2e8f0" }]}>
+                    <Ionicons name="person" size={28} color="#64748b" />
+                  </View>
+                )}
+                <View style={{ flex: 1, gap: 6 }}>
+                  <TouchableOpacity style={styles.btnSmall} onPress={pickUserPhoto}>
+                    <Text style={styles.btnSmallText}>
+                      {formPhoto ? "Ganti / Timpa Foto" : "Upload Foto"}
+                    </Text>
+                  </TouchableOpacity>
+                  {formPhoto ? (
+                    <TouchableOpacity style={[styles.btnSmall, styles.btnDanger]} onPress={deleteFormPhoto}>
+                      <Text style={styles.btnDangerText}>Hapus Foto</Text>
+                    </TouchableOpacity>
+                  ) : null}
+                </View>
+              </View>
 
               <Text style={styles.label}>Username (huruf saja)</Text>
               <TextInput
@@ -1459,7 +1602,14 @@ function AppInner() {
                 <View key={u.username} style={styles.userRow}>
                   <View style={{ flex: 1 }}>
                     <View style={styles.row}>
-                      <View style={[styles.userColorDot, { backgroundColor: u.color || "#0284c7" }]} />
+                      {u.photo ? (
+                        <Image
+                          source={{ uri: u.photo }}
+                          style={[styles.userAvatarSmall, { borderColor: u.color || "#0284c7" }]}
+                        />
+                      ) : (
+                        <View style={[styles.userColorDot, { backgroundColor: u.color || "#0284c7" }]} />
+                      )}
                       <Text style={styles.devName}>{u.display_name || u.username}</Text>
                     </View>
                     <Text style={styles.devMeta}>
@@ -1627,23 +1777,61 @@ const styles = StyleSheet.create({
     paddingVertical: 8,
   },
   toastText: { color: "#ffffff", fontSize: 12, fontWeight: "600" },
-  bgBar: {
-    backgroundColor: "#f1f5f9",
-    paddingHorizontal: 12,
-    paddingVertical: 4,
-    borderBottomWidth: 1,
-    borderBottomColor: "#e2e8f0",
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
+  mapWrap: { flex: 1, backgroundColor: "#e2e8f0", position: "relative" },
+  bottomSheet: {
+    position: "absolute",
+    left: 0,
+    right: 0,
+    bottom: 0,
+    backgroundColor: "#ffffff",
+    borderTopLeftRadius: 22,
+    borderTopRightRadius: 22,
+    borderTopWidth: 1,
+    borderLeftWidth: 1,
+    borderRightWidth: 1,
+    borderColor: "#e2e8f0",
+    shadowColor: "#0f172a",
+    shadowOpacity: 0.16,
+    shadowRadius: 14,
+    elevation: 8,
+    overflow: "hidden",
   },
-  bgText: { color: "#334155", fontSize: 11, fontWeight: "600" },
-  miniBtnAccent: { backgroundColor: "#0284c7", paddingHorizontal: 9, paddingVertical: 5, borderRadius: 7 },
-  mapWrap: { flex: 1.15, backgroundColor: "#e2e8f0", position: "relative" },
+  sheetHandleArea: {
+    paddingVertical: 10,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: "#ffffff",
+  },
+  sheetHandle: {
+    width: 44,
+    height: 5,
+    borderRadius: 3,
+    backgroundColor: "#cbd5e1",
+  },
+  avatarPreview: {
+    width: 60,
+    height: 60,
+    borderRadius: 30,
+    borderWidth: 2,
+    borderColor: "#0284c7",
+  },
+  avatarPlaceholder: {
+    width: 60,
+    height: 60,
+    borderRadius: 30,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  userAvatarSmall: {
+    width: 26,
+    height: 26,
+    borderRadius: 13,
+    borderWidth: 1.5,
+  },
   myLocFab: {
     position: "absolute",
     right: 12,
-    bottom: 14,
+    bottom: 90,
     width: 44,
     height: 44,
     borderRadius: 22,
@@ -1656,8 +1844,9 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.22,
     shadowRadius: 6,
     elevation: 5,
+    zIndex: 10,
   },
-  list: { flex: 0.85, backgroundColor: "#f8fafc", borderTopWidth: 1, borderTopColor: "#e2e8f0" },
+  list: { flex: 1, backgroundColor: "#f8fafc" },
   devCard: {
     backgroundColor: "#ffffff",
     borderRadius: 12,

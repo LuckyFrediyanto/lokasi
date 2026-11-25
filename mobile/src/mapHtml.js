@@ -117,7 +117,10 @@ window.updateDevices = function(list) {
     seen.add(d.device_id);
     const online = Date.now() - (d.last_seen || d.updated_at) < 90000;
     const col = d.color || "#0284c7";
-    const html = '<div class="user-pin" style="background:' + esc(col) + '">' + USER_SVG + '<span class="st ' + (online ? "" : "old") + '"></span></div>';
+    const inner = d.photo
+      ? '<img src="' + esc(d.photo) + '" style="width:100%;height:100%;object-fit:cover;border-radius:50%" alt="" />'
+      : USER_SVG;
+    const html = '<div class="user-pin" style="background:' + esc(col) + '">' + inner + '<span class="st ' + (online ? "" : "old") + '"></span></div>';
     const icon = L.divIcon({ className: "", html, iconSize: [36, 36], iconAnchor: [18, 18] });
     if (markers.has(d.device_id)) {
       markers.get(d.device_id).setLatLng([d.lat, d.lng]).setIcon(icon);

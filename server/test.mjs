@@ -96,9 +96,24 @@ assert.equal(res.status, 201);
 res = await hub.handleApi(req("/api/places", {
   method: "POST",
   token: adminAuth.token,
-  body: { name: "Salah", lat: -6.81, lng: 110.85, radius: 75 },
+  body: { name: "Custom Radius", lat: -6.81, lng: 110.85, radius: 350 },
+}));
+assert.equal(res.status, 201);
+const customPlace = (await res.json()).place;
+assert.equal(customPlace.radius, 350);
+
+res = await hub.handleApi(req("/api/places", {
+  method: "POST",
+  token: adminAuth.token,
+  body: { name: "Salah Min", lat: -6.81, lng: 110.85, radius: 10 },
 }));
 assert.equal(res.status, 400);
+
+res = await hub.handleApi(req(`/api/places/${customPlace.id}`, {
+  method: "DELETE",
+  token: adminAuth.token,
+}));
+assert.equal(res.status, 200);
 
 res = await hub.handleApi(req("/api/location", {
   method: "POST",

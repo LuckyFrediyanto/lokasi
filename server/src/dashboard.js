@@ -258,12 +258,14 @@ function upsertMarker(d) {
   const online = Date.now() - (d.last_seen || d.updated_at) < 90000;
   const col = d.color || "#0284c7";
   const tip = (d.display_name || d.username) + " (" + (d.platform === "ios" ? "iOS" : "Android") + ")";
-  const svg = '<svg viewBox="0 0 24 24"><path d="M12 12c2.7 0 5-2.3 5-5s-2.3-5-5-5-5 2.3-5 5 2.3 5 5 5zm0 2c-3.3 0-10 1.7-10 5v3h20v-3c0-3.3-6.7-5-10-5z"/></svg>';
+  const inner = d.photo
+    ? '<img src="' + esc(d.photo) + '" style="width:100%;height:100%;object-fit:cover;border-radius:50%" alt="" />'
+    : '<svg viewBox="0 0 24 24"><path d="M12 12c2.7 0 5-2.3 5-5s-2.3-5-5-5-5 2.3-5 5 2.3 5 5 5zm0 2c-3.3 0-10 1.7-10 5v3h20v-3c0-3.3-6.7-5-10-5z"/></svg>';
   const icon = L.divIcon({
     className: "",
-    html: '<div class="user-pin" title="' + esc(tip) + '" style="background:' + esc(col) + '">' + svg + '<span class="st ' + (online ? "" : "off") + '"></span></div>',
-    iconSize: [34, 34],
-    iconAnchor: [17, 17]
+    html: '<div class="user-pin" title="' + esc(tip) + '" style="background:' + esc(col) + '">' + inner + '<span class="st ' + (online ? "" : "off") + '"></span></div>',
+    iconSize: [36, 36],
+    iconAnchor: [18, 18]
   });
   if (markers.has(d.device_id)) {
     markers.get(d.device_id).setLatLng([d.lat, d.lng]).setIcon(icon);
@@ -334,8 +336,11 @@ function renderPanel() {
     const pLabel = d.platform === "ios" ? "iOS" : "Android";
     const placeTxt = d.current_place ? " · Di " + esc(d.current_place) : "";
     const isRinging = ringingTimers.has(d.device_id);
+    const avatar = d.photo
+      ? '<img src="' + esc(d.photo) + '" style="width:20px;height:20px;border-radius:50%;object-fit:cover;margin-right:6px;vertical-align:middle;border:1px solid ' + esc(d.color || '#0284c7') + '" alt="" />'
+      : '<span class="color-dot" style="background:' + esc(d.color || "#0284c7") + '"></span>';
     return '<div class="dev">' +
-      '<div class="dev-top"><span class="dev-name"><span class="color-dot" style="background:' + esc(d.color || "#0284c7") + '"></span>' + esc(d.display_name || d.username) + '</span><span class="badge ' + esc(d.platform) + '">' + pLabel + '</span></div>' +
+      '<div class="dev-top"><span class="dev-name">' + avatar + esc(d.display_name || d.username) + '</span><span class="badge ' + esc(d.platform) + '">' + pLabel + '</span></div>' +
       '<div class="meta">' + esc(d.device_name) + placeTxt + '<br>' +
       (online ? "● Online" : "○ Offline") + " · " + ago(d.updated_at) + " · Baterai " + bat + " · Akurasi " + acc + '</div>' +
       '<div class="dev-btns">' +
@@ -516,14 +521,18 @@ function resetUserForm() {
 }
 
 async function loadUsers() {
-  const { users } = await api("/api/users");
-  document.getElementById("usersList").innerHTML = users.map((u) =>
-    '<div class="user-row"><div><span class="color-dot" style="background:' + esc(u.color || "#0284c7") + '"></span><strong>' + esc(u.display_name || u.username) + '</strong> <span class="meta">(@' + esc(u.username) + ' · ' + esc(u.role) + (u.logged_in ? ' · aktif' : '') + ')</span></div>' +
-    '<div style="display:flex;gap:5px"><button class="sec" type="button" onclick="editUser(\\'' + esc(u.username) + '\\',\\'' + esc(u.display_name || u.username) + '\\',\\'' + esc(u.role) + '\\')">Edit</button>' +
-    '<button class="sec" type="button" onclick="logoutUser(\\'' + esc(u.username) + '\\')">Logout</button>' +
-    (u.username === me.username ? "" : '<button class="danger" type="button" onclick="delUser(\\'' + esc(u.username) + '\\')">Hapus</button>') +
-    '</div></div>'
-  ).join("");
+  const users = (await api("/api/users")).users || [];
+  document.getElementById("usersList").innerHTML = users.map((u) => {
+    const avatar = u.photo
+      ? '<img src="' + esc(u.photo) + '" style="width:28px;height:28px;border-radius:50%;object-fit:cover;margin-right:8px;vertical-align:middle;border:1.5px solid ' + esc(u.color || '#0284c7') + '" alt="" />'
+      : '<span class="color-dot" style="background:' + esc(u.color || "#0284c7") + ';width:14px;height:14px"></span>';
+    return '<div class="user-row"><div style="display:flex;align-items:center">' + avatar +
+      '<div><strong>' + esc(u.display_name || u.username) + '</strong> <span class="meta">(@' + esc(u.username) + ' · ' + esc(u.role) + (u.logged_in ? ' · aktif' : '') + ')</span></div></div>' +
+      '<div style="display:flex;gap:5px"><button class="sec" type="button" onclick="editUser(\\'' + esc(u.username) + '\\',\\'' + esc(u.display_name || u.username) + '\\',\\'' + esc(u.role) + '\\')">Edit</button>' +
+      '<button class="sec" type="button" onclick="logoutUser(\\'' + esc(u.username) + '\\')">Logout</button>' +
+      (u.username === me.username ? "" : '<button class="danger" type="button" onclick="delUser(\\'' + esc(u.username) + '\\')">Hapus</button>') +
+      '</div></div>';
+  }).join("");
 }
 
 window.logoutUser = async (u) => {
