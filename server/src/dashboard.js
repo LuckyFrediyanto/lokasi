@@ -304,7 +304,7 @@ function renderMarkers() {
     const avgLng = g.items.reduce((s, d) => s + d.lng, 0) / g.items.length;
     if (g.items.length === 1) {
       const d = g.items[0];
-      const online = Date.now() - (d.last_seen || d.updated_at) < 90000;
+      const online = Date.now() - (d.last_seen || d.updated_at) < 45000;
       const col = d.color || "#0284c7";
       const tip = (d.display_name || d.username) + " (" + (d.platform === "ios" ? "iOS" : "Android") + ")";
       const inner = d.photo ? '<img src="' + esc(d.photo) + '" alt="" />' : svg;
@@ -317,7 +317,7 @@ function renderMarkers() {
       clusterMarkers.push(L.marker([d.lat, d.lng], { icon }).bindTooltip(esc(tip)).addTo(map));
     } else {
       const itemsHtml = g.items.map((d) => {
-        const online = Date.now() - (d.last_seen || d.updated_at) < 90000;
+        const online = Date.now() - (d.last_seen || d.updated_at) < 45000;
         const col = d.color || "#0284c7";
         const inner = d.photo ? '<img src="' + esc(d.photo) + '" alt="" />' : svg;
         return '<div class="cluster-av" style="background:' + esc(col) + '">' + inner + '<span class="st ' + (online ? "" : "off") + '"></span></div>';
@@ -400,19 +400,22 @@ function renderPanel() {
     return;
   }
   list.innerHTML = arr.map((d) => {
-    const online = Date.now() - (d.last_seen || d.updated_at) < 90000;
+    const online = Date.now() - (d.last_seen || d.updated_at) < 45000;
     const bat = d.battery != null ? Math.round(d.battery) + "%" + (d.charging ? " ⚡" : "") : "-";
     const acc = d.accuracy != null ? Math.round(d.accuracy) + "m" : "-";
     const pLabel = d.platform === "ios" ? "iOS" : "Android";
     const placeTxt = d.current_place ? " · Di " + esc(d.current_place) : "";
     const isRinging = ringingTimers.has(d.device_id);
+    const statusHtml = online
+      ? '<span style="color:#16a34a;font-weight:700">● Online</span>'
+      : '<span style="color:#dc2626;font-weight:700">● Offline</span>';
     const avatar = d.photo
       ? '<img src="' + esc(d.photo) + '" style="width:20px;height:20px;border-radius:50%;object-fit:cover;margin-right:6px;vertical-align:middle;border:1px solid ' + esc(d.color || '#0284c7') + '" alt="" />'
       : '<span class="color-dot" style="background:' + esc(d.color || "#0284c7") + '"></span>';
     return '<div class="dev">' +
       '<div class="dev-top"><span class="dev-name">' + avatar + esc(d.display_name || d.username) + '</span><span class="badge ' + esc(d.platform) + '">' + pLabel + '</span></div>' +
       '<div class="meta">' + esc(d.device_name) + placeTxt + '<br>' +
-      (online ? "● Online" : "○ Offline") + " · " + ago(d.updated_at) + " · Baterai " + bat + " · Akurasi " + acc + '</div>' +
+      statusHtml + " · " + ago(d.updated_at) + " · Baterai " + bat + " · Akurasi " + acc + '</div>' +
       '<div class="dev-btns">' +
       '<button type="button" onclick="focusDev(\\'' + esc(d.device_id) + '\\')">Fokus</button>' +
       '<button class="sec" type="button" onclick="openRoute(' + d.lat + ',' + d.lng + ')">Rute</button>' +
@@ -492,6 +495,15 @@ function connectWs() {
       renderPanel();
     } else if (msg.type === "location") {
       upsertMarker(msg.device);
+    } else if (msg.type === "presence" && msg.username) {
+      for (const [id, d] of devices.entries()) {
+        if (d.username === msg.username) {
+          d.last_seen = msg.last_seen;
+          devices.set(id, d);
+        }
+      }
+      renderMarkers();
+      renderPanel();
     } else if (msg.type === "device_removed") {
       removeDevice(msg.device_id);
     } else if (msg.type === "notification" && msg.notification) {
@@ -556,7 +568,7 @@ document.getElementById("confirmLogoutBtn").onclick = async () => {
     return;
   }
   try {
-    await api("/api/auth/logout", { method: "POST", body: JSON.stringify({ password: pw, require_password: true }) });
+    await api("/api/auth/logout", { method: "POST", body: JSON.stringify({ password: pw, require_password: true, client_type: "web" }) });
     document.getElementById("logoutModal").classList.add("hidden");
     token = "";
     localStorage.removeItem(LS_TOKEN);

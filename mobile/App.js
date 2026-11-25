@@ -493,7 +493,7 @@ function AppInner() {
           if (ws.readyState === 1) {
             ws.send(JSON.stringify({ type: "heartbeat", device_id: myDeviceId }));
           }
-        }, 25000);
+        }, 15000);
       };
       ws.onmessage = (ev) => {
         try {
@@ -510,6 +510,12 @@ function AppInner() {
             if (Array.isArray(msg.notifications)) setNotifications(msg.notifications);
           } else if (msg.type === "location" && msg.device) {
             upsert(msg.device);
+          } else if (msg.type === "presence" && msg.username) {
+            setDevices((prev) =>
+              prev.map((d) =>
+                d.username === msg.username ? { ...d, last_seen: msg.last_seen } : d
+              )
+            );
           } else if (msg.type === "device_removed") {
             setDevices((prev) => prev.filter((d) => d.device_id !== msg.device_id));
             clearRingingTarget(msg.device_id);
@@ -667,6 +673,7 @@ function AppInner() {
             device_id: myDeviceId,
             password: pw,
             require_password: true,
+            client_type: "mobile",
           },
         });
       }
@@ -1595,7 +1602,7 @@ function AppInner() {
             </Text>
           ) : (
             devices.map((d) => {
-              const online = Date.now() - (d.last_seen || d.updated_at) < 90000;
+              const online = Date.now() - (d.last_seen || d.updated_at) < 45000;
               const bat = d.battery != null ? `${Math.round(d.battery)}%${d.charging ? " ⚡" : ""}` : "-";
               const acc = d.accuracy != null ? `${Math.round(d.accuracy)}m` : "-";
               const pLabel = d.platform === "ios" ? "iOS" : "Android";
@@ -1623,7 +1630,10 @@ function AppInner() {
                     {d.current_place ? ` · Di ${d.current_place}` : ""}
                   </Text>
                   <Text style={styles.devMeta}>
-                    {online ? "● Online" : "○ Offline"} · {formatAgo(d.updated_at)} · Baterai {bat} · Akurasi {acc}
+                    <Text style={{ color: online ? "#16a34a" : "#dc2626", fontWeight: "700" }}>
+                      {online ? "● Online" : "● Offline"}
+                    </Text>
+                    {` · ${formatAgo(d.updated_at)} · Baterai ${bat} · Akurasi ${acc}`}
                   </Text>
                   <View style={styles.devActions}>
                     <TouchableOpacity style={styles.chipPrimary} onPress={() => focusDevice(d)}>

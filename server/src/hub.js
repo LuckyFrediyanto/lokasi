@@ -7,7 +7,7 @@ const TRIP_MIN_DISTANCE_M = 150;
 const TRIP_MIN_EXCURSION_M = 100;
 const MAX_TRUSTED_ACCURACY_M = 80;
 const NOTIF_LIMIT = 50;
-const ONLINE_WINDOW_MS = 90 * 1000;
+const ONLINE_WINDOW_MS = 45 * 1000;
 const PBKDF2_ITERATIONS = 100000;
 const USERNAME_RE = /^[a-z]{2,32}$/;
 const DEVICE_ID_RE = /^[a-zA-Z0-9._:-]{2,80}$/;
@@ -666,6 +666,11 @@ export class LocationHubCore {
         user.username
       );
     }
+    this.broadcast({
+      type: "presence",
+      username: user.username,
+      last_seen: now,
+    });
   }
 
   saveLocation(user, body) {
@@ -1136,46 +1141,33 @@ export class LocationHubCore {
       } else if (body.require_password === true) {
         return json({ error: "Password wajib diisi untuk keluar" }, 400);
       }
-      const removedIds = new Set();
-      const bySession = this.sql.exec(
-        "SELECT device_id FROM locations WHERE session_token = ?",
-        user.token
-      ).toArray();
-      for (const r of bySession) removedIds.add(r.device_id);
-
-      if (typeof body.device_id === "string" && DEVICE_ID_RE.test(body.device_id.trim())) {
-        const cleaned = body.device_id.trim();
-        const fullId = cleaned.startsWith(`${user.username}:`)
-          ? cleaned
-          : `${user.username}:${cleaned}`.slice(0, 80);
-        const byDev = this.sql.exec(
-          "SELECT device_id FROM locations WHERE device_id = ? AND username = ?",
-          fullId,
-          user.username
-        ).toArray();
-        for (const r of byDev) removedIds.add(r.device_id);
+      if (body.client_type === "web") {
+        this.sql.exec("DELETE FROM sessions WHERE token = ?", user.token);
+        return json({ ok: true });
       }
+
+      const removedIds = new Set();
+      const allMobileDevs = this.sql.exec(
+        "SELECT device_id FROM locations WHERE username = ?",
+        user.username
+      ).toArray();
+      for (const r of allMobileDevs) removedIds.add(r.device_id);
 
       this.sql.exec("DELETE FROM sessions WHERE token = ?", user.token);
-
-      const remaining = this.sql.exec(
-        "SELECT COUNT(*) AS n FROM sessions WHERE username = ? AND expires_at > ?",
-        user.username,
-        Date.now()
-      ).toArray()[0];
-      if (!remaining || Number(remaining.n) === 0) {
-        const allUserDevs = this.sql.exec(
-          "SELECT device_id FROM locations WHERE username = ?",
-          user.username
-        ).toArray();
-        for (const r of allUserDevs) removedIds.add(r.device_id);
-      }
+      this.sql.exec("DELETE FROM sessions WHERE username = ? AND client_type = 'mobile'", user.username);
 
       for (const devId of removedIds) {
         this.sql.exec("DELETE FROM locations WHERE device_id = ?", devId);
         this.sql.exec("DELETE FROM device_place_state WHERE device_id = ?", devId);
+        this.sql.exec("DELETE FROM active_rings WHERE device_id = ?", devId);
         this.broadcast({ type: "device_removed", device_id: devId });
       }
+      this.broadcast({
+        type: "snapshot",
+        devices: this.listLocations(),
+        places: this.listPlaces(),
+        notifications: this.listNotifications(),
+      });
       return json({ ok: true });
     }
 
