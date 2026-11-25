@@ -373,4 +373,26 @@ assert.equal(res.status, 401);
 res = await hub.handleApi(req("/api/locations", { token: freshAdmin.token }));
 assert.equal((await res.json()).devices.length, 0);
 
+res = await hub.handleApi(req("/api/notifications", { token: freshAdmin.token }));
+const notifsAfterLogout = await res.json();
+assert.equal(notifsAfterLogout.notifications.some((n) => n.username === "lucky"), false);
+
+res = await hub.handleApi(req("/api/auth/login", {
+  method: "POST",
+  body: { username: "lucky", password: "bebas", client_type: "mobile" },
+}));
+const luckyRelogin = await res.json();
+assert.equal(res.status, 200);
+
+res = await hub.handleApi(req("/api/notifications", { token: freshAdmin.token }));
+const notifsAfterRelogin = await res.json();
+assert.equal(notifsAfterRelogin.notifications.some((n) => n.username === "lucky"), true);
+
+res = await hub.handleApi(req("/api/locations/lucky%3Ahp2/history?days=1", {
+  token: luckyRelogin.token,
+}));
+assert.equal(res.status, 200);
+const restoredHist = await res.json();
+assert.ok(restoredHist.points.length > 0);
+
 console.log("ALL_V4_TESTS_PASSED");

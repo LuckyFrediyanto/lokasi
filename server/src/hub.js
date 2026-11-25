@@ -485,8 +485,14 @@ export class LocationHubCore {
        FROM notifications n
        LEFT JOIN places p ON p.id = n.place_id
        LEFT JOIN users u ON u.username = n.username
+       WHERE EXISTS (
+         SELECT 1 FROM sessions s
+         WHERE s.username = n.username
+           AND s.expires_at > ?
+       )
        ORDER BY n.created_at DESC
        LIMIT ?`,
+      Date.now(),
       NOTIF_LIMIT
     ).toArray();
     return rows.map((r) => ({
@@ -823,7 +829,8 @@ export class LocationHubCore {
     const rawRows = this.sql.exec(
       `SELECT lat, lng, accuracy, battery, recorded_at
        FROM location_history
-       WHERE device_id = ? AND recorded_at >= ?
+       WHERE device_id = ?
+         AND recorded_at >= ?
        ORDER BY recorded_at ASC`,
       deviceId,
       since
