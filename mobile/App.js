@@ -180,6 +180,7 @@ function AppInner() {
   const [notifications, setNotifications] = useState([]);
   const [unreadNotifs, setUnreadNotifs] = useState(0);
   const [toastMsg, setToastMsg] = useState("");
+  const [otaChecking, setOtaChecking] = useState(false);
 
   const [panelMode, setPanelMode] = useState("devices");
   const [historyTarget, setHistoryTarget] = useState(null);
@@ -294,6 +295,27 @@ function AppInner() {
       delete next[deviceId];
       return next;
     });
+  }
+
+  async function checkManualUpdate() {
+    if (otaChecking || __DEV__) return;
+    setOtaChecking(true);
+    showToast("Memeriksa update terbaru...");
+    try {
+      const res = await Updates.checkForUpdateAsync();
+      if (res.isAvailable) {
+        showToast("Mengunduh update...");
+        await Updates.fetchUpdateAsync();
+        showToast("Menerapkan update...");
+        await Updates.reloadAsync();
+      } else {
+        showToast("Aplikasi sudah versi terbaru");
+      }
+    } catch (e) {
+      showToast("Gagal cek update: " + (e.message || "koneksi"));
+    } finally {
+      setOtaChecking(false);
+    }
   }
 
   useEffect(() => {
@@ -1112,12 +1134,16 @@ function AppInner() {
           },
         ]}
       >
-        <View style={styles.floatingUserCard}>
+        <TouchableOpacity
+          style={styles.floatingUserCard}
+          activeOpacity={0.8}
+          onPress={checkManualUpdate}
+        >
           <View style={[styles.dot, { backgroundColor: wsOnline ? "#16a34a" : "#dc2626" }]} />
           <Text style={styles.floatingUserText} numberOfLines={1}>
             {user.display_name || user.username}
           </Text>
-        </View>
+        </TouchableOpacity>
 
         <View style={styles.floatingActions}>
           <TouchableOpacity

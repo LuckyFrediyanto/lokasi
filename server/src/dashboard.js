@@ -136,6 +136,17 @@ export const DASHBOARD_HTML = `<!doctype html>
   <div style="flex:1;overflow:auto;padding:16px;max-width:640px;width:100%;margin:0 auto;display:flex;flex-direction:column;gap:14px">
     <form class="dev" id="userForm" style="padding:16px">
       <input type="hidden" id="editOriginalU" value="" />
+      <div style="display:flex;align-items:center;gap:14px;margin-bottom:12px">
+        <img id="formAvatarPreview" src="" style="width:56px;height:56px;border-radius:50%;object-fit:cover;border:2px solid #0284c7;display:none" alt="" />
+        <div id="formAvatarPlaceholder" style="width:56px;height:56px;border-radius:50%;background:#e2e8f0;display:flex;align-items:center;justify-content:center;color:#64748b">
+          <svg style="width:28px;height:28px;fill:currentColor" viewBox="0 0 24 24"><path d="M12 12c2.7 0 5-2.3 5-5s-2.3-5-5-5-5 2.3-5 5 2.3 5 5 5zm0 2c-3.3 0-10 1.7-10 5v3h20v-3c0-3.3-6.7-5-10-5z"/></svg>
+        </div>
+        <div style="display:flex;gap:6px;flex-wrap:wrap">
+          <input type="file" id="photoFileInput" accept="image/*" style="display:none" />
+          <button class="sec" type="button" id="uploadPhotoBtn">Upload Foto</button>
+          <button class="danger hidden" type="button" id="deletePhotoBtn">Hapus Foto</button>
+        </div>
+      </div>
       <label style="margin-top:0">Username (huruf saja)</label>
       <input id="newU" required placeholder="lucky" />
       <label>Nama (tampil di peta &amp; notifikasi)</label>
@@ -171,6 +182,7 @@ let unreadNotifs = 0;
 let panelMode = "devices";
 let historyLayers = [];
 let historyState = null;
+let currentFormPhoto = null;
 let ringingTimers = new Map();
 let toastTimer = null;
 
@@ -507,12 +519,34 @@ document.getElementById("myLocBtn").onclick = () => {
   }
 };
 
+function setFormPhotoState(base64) {
+  currentFormPhoto = base64;
+  const img = document.getElementById("formAvatarPreview");
+  const ph = document.getElementById("formAvatarPlaceholder");
+  const delBtn = document.getElementById("deletePhotoBtn");
+  const upBtn = document.getElementById("uploadPhotoBtn");
+  if (base64) {
+    img.src = base64;
+    img.style.display = "block";
+    ph.style.display = "none";
+    delBtn.classList.remove("hidden");
+    upBtn.textContent = "Ganti Foto";
+  } else {
+    img.src = "";
+    img.style.display = "none";
+    ph.style.display = "flex";
+    delBtn.classList.add("hidden");
+    upBtn.textContent = "Upload Foto";
+  }
+}
+
 function resetUserForm() {
   document.getElementById("editOriginalU").value = "";
   document.getElementById("newU").value = "";
   document.getElementById("newN").value = "";
   document.getElementById("newP").value = "";
   document.getElementById("newR").value = "user";
+  setFormPhotoState(null);
   document.getElementById("adminFormTitle").textContent = "Tambah User";
   document.getElementById("passLabel").textContent = "Password (bebas)";
   document.getElementById("saveUserBtn").textContent = "Tambah User";
@@ -526,14 +560,60 @@ async function loadUsers() {
     const avatar = u.photo
       ? '<img src="' + esc(u.photo) + '" style="width:28px;height:28px;border-radius:50%;object-fit:cover;margin-right:8px;vertical-align:middle;border:1.5px solid ' + esc(u.color || '#0284c7') + '" alt="" />'
       : '<span class="color-dot" style="background:' + esc(u.color || "#0284c7") + ';width:14px;height:14px"></span>';
+    const jsonU = esc(JSON.stringify(u));
     return '<div class="user-row"><div style="display:flex;align-items:center">' + avatar +
       '<div><strong>' + esc(u.display_name || u.username) + '</strong> <span class="meta">(@' + esc(u.username) + ' · ' + esc(u.role) + (u.logged_in ? ' · aktif' : '') + ')</span></div></div>' +
-      '<div style="display:flex;gap:5px"><button class="sec" type="button" onclick="editUser(\\'' + esc(u.username) + '\\',\\'' + esc(u.display_name || u.username) + '\\',\\'' + esc(u.role) + '\\')">Edit</button>' +
+      '<div style="display:flex;gap:5px"><button class="sec" type="button" data-user="' + jsonU + '" onclick="startEditUserObj(this)">Edit</button>' +
       '<button class="sec" type="button" onclick="logoutUser(\\'' + esc(u.username) + '\\')">Logout</button>' +
       (u.username === me.username ? "" : '<button class="danger" type="button" onclick="delUser(\\'' + esc(u.username) + '\\')">Hapus</button>') +
       '</div></div>';
   }).join("");
 }
+
+window.startEditUserObj = (btn) => {
+  try {
+    const u = JSON.parse(btn.getAttribute("data-user"));
+    document.getElementById("editOriginalU").value = u.username;
+    document.getElementById("newU").value = u.username;
+    document.getElementById("newN").value = u.display_name || u.username;
+    document.getElementById("newP").value = "";
+    document.getElementById("newR").value = u.role;
+    setFormPhotoState(u.photo || null);
+    document.getElementById("adminFormTitle").textContent = "Edit User @" + u.username;
+    document.getElementById("passLabel").textContent = "Password baru (kosongkan jika tidak diubah)";
+    document.getElementById("saveUserBtn").textContent = "Simpan Perubahan";
+    document.getElementById("cancelEditBtn").classList.remove("hidden");
+  } catch {}
+};
+
+document.getElementById("uploadPhotoBtn").onclick = () => {
+  document.getElementById("photoFileInput").click();
+};
+document.getElementById("deletePhotoBtn").onclick = () => {
+  setFormPhotoState(null);
+};
+document.getElementById("photoFileInput").onchange = (e) => {
+  const file = e.target.files && e.target.files[0];
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = (ev) => {
+    const img = new window.Image();
+    img.onload = () => {
+      const canvas = document.createElement("canvas");
+      canvas.width = 160;
+      canvas.height = 160;
+      const ctx = canvas.getContext("2d");
+      const minSide = Math.min(img.width, img.height);
+      const sx = (img.width - minSide) / 2;
+      const sy = (img.height - minSide) / 2;
+      ctx.drawImage(img, sx, sy, minSide, minSide, 0, 0, 160, 160);
+      const dataUrl = canvas.toDataURL("image/jpeg", 0.75);
+      setFormPhotoState(dataUrl);
+    };
+    img.src = ev.target.result;
+  };
+  reader.readAsDataURL(file);
+};
 
 window.logoutUser = async (u) => {
   if (!confirm("Logout paksa user @" + u + "?")) return;
@@ -582,6 +662,7 @@ document.getElementById("userForm").onsubmit = async (e) => {
     username: document.getElementById("newU").value,
     display_name: document.getElementById("newN").value,
     password: document.getElementById("newP").value,
+    photo: currentFormPhoto,
     role: document.getElementById("newR").value
   };
   try {
