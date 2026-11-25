@@ -4,8 +4,8 @@ import {
   Linking,
   Modal,
   Platform,
-  SafeAreaView,
   ScrollView,
+  StatusBar as RNStatusBar,
   StyleSheet,
   Switch,
   Text,
@@ -15,6 +15,8 @@ import {
   View,
 } from "react-native";
 import { StatusBar } from "expo-status-bar";
+import { SafeAreaProvider, useSafeAreaInsets } from "react-native-safe-area-context";
+import * as Updates from "expo-updates";
 import { WebView } from "react-native-webview";
 import * as Haptics from "expo-haptics";
 import { toWsUrl } from "./src/config";
@@ -45,7 +47,14 @@ function formatAgo(ts) {
   return `${Math.floor(hr / 24)}h lalu`;
 }
 
-export default function App() {
+function AppInner() {
+  const insets = useSafeAreaInsets();
+  const topInset = Math.max(
+    insets.top,
+    Platform.OS === "android" ? (RNStatusBar.currentHeight || 28) : 0
+  );
+  const bottomInset = insets.bottom;
+
   const [booting, setBooting] = useState(true);
   const [serverUrl, setServerUrl] = useState("");
   const [token, setToken] = useState(null);
@@ -74,6 +83,19 @@ export default function App() {
   const webRef = useRef(null);
   const wsRef = useRef(null);
   const reconnectTimer = useRef(null);
+
+  useEffect(() => {
+    if (__DEV__) return;
+    (async () => {
+      try {
+        const res = await Updates.checkForUpdateAsync();
+        if (res.isAvailable) {
+          await Updates.fetchUpdateAsync();
+          await Updates.reloadAsync();
+        }
+      } catch {}
+    })();
+  }, []);
 
   useEffect(() => {
     (async () => {
@@ -321,17 +343,17 @@ export default function App() {
 
   if (booting) {
     return (
-      <SafeAreaView style={styles.center}>
-        <StatusBar style="light" />
+      <View style={[styles.center, { paddingTop: topInset + 20, paddingBottom: bottomInset + 20 }]}>
+        <StatusBar style="light" backgroundColor="#0f172a" translucent />
         <Text style={styles.muted}>Memuat...</Text>
-      </SafeAreaView>
+      </View>
     );
   }
 
   if (!token || !user) {
     return (
-      <SafeAreaView style={styles.center}>
-        <StatusBar style="light" />
+      <View style={[styles.center, { paddingTop: topInset + 20, paddingBottom: bottomInset + 20 }]}>
+        <StatusBar style="light" backgroundColor="#0f172a" translucent />
         <View style={styles.card}>
           <Text style={styles.title}>Lacak HP Realtime</Text>
           <Text style={styles.sub}>Gabungan iOS &amp; Android (Latar Belakang)</Text>
@@ -374,14 +396,14 @@ export default function App() {
             <Text style={styles.btnPrimaryText}>{busy ? "Masuk..." : "Masuk"}</Text>
           </TouchableOpacity>
         </View>
-      </SafeAreaView>
+      </View>
     );
   }
 
   return (
-    <SafeAreaView style={styles.container}>
-      <StatusBar style="light" />
-      <View style={styles.header}>
+    <View style={[styles.container, { paddingBottom: bottomInset }]}>
+      <StatusBar style="light" backgroundColor="#1e293b" translucent />
+      <View style={[styles.header, { paddingTop: topInset + 8 }]}>
         <View style={styles.row}>
           <View style={[styles.dot, { backgroundColor: wsOnline ? "#22c55e" : "#ef4444" }]} />
           <Text style={styles.headerTitle}>{user.username}</Text>
@@ -468,7 +490,7 @@ export default function App() {
       </ScrollView>
 
       <Modal visible={adminOpen} animationType="slide" transparent>
-        <View style={styles.modalBg}>
+        <View style={[styles.modalBg, { paddingTop: topInset + 16, paddingBottom: bottomInset + 16 }]}>
           <View style={styles.modalCard}>
             <View style={styles.devHead}>
               <Text style={styles.title}>Kelola User</Text>
@@ -519,7 +541,15 @@ export default function App() {
           </View>
         </View>
       </Modal>
-    </SafeAreaView>
+    </View>
+  );
+}
+
+export default function App() {
+  return (
+    <SafeAreaProvider>
+      <AppInner />
+    </SafeAreaProvider>
   );
 }
 
@@ -544,7 +574,8 @@ const styles = StyleSheet.create({
   btnPrimary: { backgroundColor: "#38bdf8", borderRadius: 10, paddingVertical: 12, alignItems: "center", marginTop: 14 },
   btnPrimaryText: { color: "#0b1220", fontWeight: "700", fontSize: 14 },
   header: {
-    height: 54,
+    minHeight: 54,
+    paddingBottom: 10,
     backgroundColor: "#1e293b",
     borderBottomWidth: 1,
     borderBottomColor: "#334155",

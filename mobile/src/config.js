@@ -1,4 +1,5 @@
-export const DEFAULT_SERVER_URL = "https://lacak-hp-server.azko-kudus.workers.dev";
+export const DEFAULT_SERVER_URL = "https://lacak-hp-server.luckyfrediyanto.workers.dev";
+export const LEGACY_SERVER_URL = "https://lacak-hp-server.azko-kudus.workers.dev";
 
 export const STORE_KEYS = {
   SERVER_URL: "lacak_server_url",

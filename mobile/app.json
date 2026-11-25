@@ -4,7 +4,17 @@
     "slug": "lacak-hp",
     "owner": "luckyfrediyanto",
     "version": "1.0.0",
+    "runtimeVersion": "1.0.0",
     "orientation": "portrait",
+    "updates": {
+      "url": "https://u.expo.dev/62158200-5632-4a64-b3f2-dbd401cac35b",
+      "enabled": true,
+      "checkAutomatically": "ON_LOAD",
+      "fallbackToCacheTimeout": 0,
+      "requestHeaders": {
+        "expo-channel-name": "preview"
+      }
+    },
     "ios": {
       "supportsTablet": true,
       "bundleIdentifier": "com.pribadi.lacakhp",

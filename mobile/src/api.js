@@ -1,11 +1,17 @@
 import * as SecureStore from "expo-secure-store";
 import * as Device from "expo-device";
 import { Platform } from "react-native";
-import { DEFAULT_SERVER_URL, STORE_KEYS, normalizeServerUrl } from "./config";
+import { DEFAULT_SERVER_URL, LEGACY_SERVER_URL, STORE_KEYS, normalizeServerUrl } from "./config";
 
 export async function getServerUrl() {
   const saved = await SecureStore.getItemAsync(STORE_KEYS.SERVER_URL);
-  return saved || DEFAULT_SERVER_URL;
+  if (!saved || saved === LEGACY_SERVER_URL) {
+    if (saved === LEGACY_SERVER_URL) {
+      await SecureStore.setItemAsync(STORE_KEYS.SERVER_URL, DEFAULT_SERVER_URL);
+    }
+    return DEFAULT_SERVER_URL;
+  }
+  return saved;
 }
 
 export async function saveServerUrl(url) {
