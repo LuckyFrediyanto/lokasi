@@ -4,6 +4,7 @@ export const STORE_KEYS = {
   TOKEN: "lacak_auth_token",
   USERNAME: "lacak_username",
   DEVICE_ID: "lacak_device_id",
+  BATTERY_OK: "lacak_battery_exempt_v1",
 };
 
 export function toWsUrl(token) {

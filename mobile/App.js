@@ -18,9 +18,11 @@ import { StatusBar } from "expo-status-bar";
 import { SafeAreaProvider, useSafeAreaInsets } from "react-native-safe-area-context";
 import * as Updates from "expo-updates";
 import * as Notifications from "expo-notifications";
+import * as SecureStore from "expo-secure-store";
+import * as IntentLauncher from "expo-intent-launcher";
 import { WebView } from "react-native-webview";
-import * as Haptics from "expo-haptics";
-import { toWsUrl } from "./src/config";
+import { STORE_KEYS, toWsUrl } from "./src/config";
+import { startLoudRing, stopLoudRing } from "./src/alarm";
 import {
   apiRequest,
   clearSession,
@@ -82,9 +84,38 @@ async function setupNotifications() {
         importance: Notifications.AndroidImportance.HIGH,
         vibrationPattern: [0, 250, 200, 250],
       });
+      await Notifications.setNotificationChannelAsync("alarm-ring", {
+        name: "Panggilan Darurat Lacak HP",
+        importance: Notifications.AndroidImportance.MAX,
+        sound: "alarm.wav",
+        bypassDnd: true,
+        vibrationPattern: [0, 700, 300, 700, 300],
+        audioAttributes: {
+          usage: Notifications.AndroidAudioUsage.ALARM,
+          contentType: Notifications.AndroidAudioContentType.SONIFICATION,
+        },
+      });
     }
     await Notifications.requestPermissionsAsync();
   } catch {}
+}
+
+async function openBatterySettings() {
+  if (Platform.OS !== "android") return;
+  try {
+    await IntentLauncher.startActivityAsync(
+      "android.settings.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS",
+      { data: "package:com.pribadi.lacakhp" }
+    );
+    return;
+  } catch {}
+  try {
+    await IntentLauncher.startActivityAsync(
+      "android.settings.IGNORE_BATTERY_OPTIMIZATION_SETTINGS"
+    );
+    return;
+  } catch {}
+  Linking.openSettings().catch(() => {});
 }
 
 async function showLocalOsNotification(message) {
@@ -143,6 +174,9 @@ function AppInner() {
   const [placeErr, setPlaceErr] = useState("");
 
   const [notifOpen, setNotifOpen] = useState(false);
+  const [ringCaller, setRingCaller] = useState(null);
+  const [batteryPromptOpen, setBatteryPromptOpen] = useState(false);
+  const [batteryOpenedOnce, setBatteryOpenedOnce] = useState(false);
 
   const [adminOpen, setAdminOpen] = useState(false);
   const [usersList, setUsersList] = useState([]);
@@ -180,19 +214,27 @@ function AppInner() {
 
   useEffect(() => {
     (async () => {
-      const [sess, devId, active] = await Promise.all([
+      const [sess, devId, active, batDone] = await Promise.all([
         getSession(),
         getOrCreateDeviceId(),
         isBackgroundTrackingActive(),
+        Platform.OS === "android"
+          ? SecureStore.getItemAsync(STORE_KEYS.BATTERY_OK)
+          : Promise.resolve("1"),
       ]);
       setMyDeviceId(devId);
       setBgActive(active);
+      if (Platform.OS === "android" && batDone !== "1") {
+        setBatteryPromptOpen(true);
+      }
       if (sess.token) {
         try {
           const res = await apiRequest("/api/auth/me", { token: sess.token });
           setToken(sess.token);
           setUser(res.user);
           setupNotifications();
+          const track = await startBackgroundTracking();
+          setBgActive(track.ok);
         } catch {
           await clearSession();
         }
@@ -210,11 +252,6 @@ function AppInner() {
     if (!mapReady || !webRef.current) return;
     webRef.current.injectJavaScript(`window.updateDevices(${JSON.stringify(devices)}); true;`);
   }, [devices, mapReady, tick]);
-
-  useEffect(() => {
-    if (!mapReady || !webRef.current) return;
-    webRef.current.injectJavaScript(`window.updatePlaces(${JSON.stringify(places)}); true;`);
-  }, [places, mapReady]);
 
   useEffect(() => {
     if (!mapReady || !webRef.current) return;
@@ -306,20 +343,25 @@ function AppInner() {
             setUnreadNotifs((n) => n + 1);
             showToast(msg.notification.message);
             showLocalOsNotification(msg.notification.message);
+          } else if (msg.type === "force_logout") {
+            forceLocalSignOut("Sesi diakhiri oleh admin atau akun login di HP lain.");
           } else if (msg.type === "ring") {
             const fullMyId = `${user.username}:${myDeviceId}`;
             if (msg.target_device_id === fullMyId || msg.target_username === user.username) {
-              Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning).catch(() => {});
-              Vibration.vibrate([0, 600, 200, 600, 200, 600]);
               const caller = msg.from_display_name || msg.from_username;
-              Alert.alert("Panggilan Lacak HP", `Perangkat ini dibunyikan oleh ${caller}`);
+              setRingCaller(caller);
+              startLoudRing(caller);
             }
           }
         } catch {}
       };
-      ws.onclose = () => {
+      ws.onclose = (ev) => {
         setWsOnline(false);
         if (heartbeatTimer) clearInterval(heartbeatTimer);
+        if (ev && ev.code === 4001) {
+          forceLocalSignOut("Sesi diakhiri oleh admin atau akun login di HP lain.");
+          return;
+        }
         if (alive) reconnectTimer.current = setTimeout(connect, 3000);
       };
     }
@@ -363,13 +405,40 @@ function AppInner() {
     };
   }, [token, user, myDeviceId]);
 
+  async function forceLocalSignOut(reason) {
+    try {
+      await stopLoudRing();
+      if (watchSubRef.current) {
+        watchSubRef.current.remove();
+        watchSubRef.current = null;
+      }
+      await stopBackgroundTracking();
+    } catch {}
+    await clearSession();
+    setRingCaller(null);
+    setBgActive(false);
+    setPlaceMode(false);
+    setHistoryTarget(null);
+    setHistoryData(null);
+    setToken(null);
+    setUser(null);
+    setDevices([]);
+    setPlaces([]);
+    setNotifications([]);
+    if (reason) Alert.alert("Logout", reason);
+  }
+
   async function handleLogin() {
     setLoginErr("");
     setBusy(true);
     try {
       const data = await apiRequest("/api/auth/login", {
         method: "POST",
-        body: { username: loginUser.trim().toLowerCase(), password: loginPass },
+        body: {
+          username: loginUser.trim().toLowerCase(),
+          password: loginPass,
+          client_type: "mobile",
+        },
       });
       await saveSession(data.token, data.user.username);
       setToken(data.token);
@@ -390,6 +459,7 @@ function AppInner() {
 
   async function handleLogout() {
     try {
+      await stopLoudRing();
       if (watchSubRef.current) {
         watchSubRef.current.remove();
         watchSubRef.current = null;
@@ -404,6 +474,7 @@ function AppInner() {
       }
     } catch {}
     await clearSession();
+    setRingCaller(null);
     setBgActive(false);
     setPlaceMode(false);
     setHistoryTarget(null);
@@ -415,16 +486,11 @@ function AppInner() {
     setNotifications([]);
   }
 
-  async function toggleBackground(val) {
-    if (val) {
-      const res = await startBackgroundTracking();
-      setBgActive(res.ok);
-      if (!res.ok) Alert.alert("Izin Latar Belakang", res.reason);
-      else sendCurrentLocationNow().catch(() => {});
-    } else {
-      await stopBackgroundTracking();
-      setBgActive(false);
-    }
+  async function ensureBackgroundPermission() {
+    const res = await startBackgroundTracking();
+    setBgActive(res.ok);
+    if (!res.ok) Alert.alert("Izin Latar Belakang", res.reason);
+    else sendCurrentLocationNow().catch(() => {});
   }
 
   async function handleSendNow() {
@@ -663,6 +729,34 @@ function AppInner() {
     }
   }
 
+  function logoutUserByAdmin(uname) {
+    Alert.alert("Logout User", `Keluarkan paksa akun @${uname} dari perangkatnya?`, [
+      { text: "Batal", style: "cancel" },
+      {
+        text: "Logout",
+        style: "destructive",
+        onPress: async () => {
+          try {
+            await apiRequest(`/api/users/${encodeURIComponent(uname)}/logout`, {
+              method: "POST",
+              token,
+            });
+            showToast(`Akun @${uname} telah di-logout`);
+            if (uname === user.username) {
+              setAdminOpen(false);
+              forceLocalSignOut(null);
+              return;
+            }
+            const data = await apiRequest("/api/users", { token });
+            setUsersList(data.users || []);
+          } catch (e) {
+            setAdminErr(e.message);
+          }
+        },
+      },
+    ]);
+  }
+
   function deleteUser(uname) {
     Alert.alert("Hapus User", `Hapus akun @${uname}?`, [
       { text: "Batal", style: "cancel" },
@@ -684,6 +778,41 @@ function AppInner() {
       },
     ]);
   }
+
+  const batteryModal = (
+    <Modal visible={batteryPromptOpen} animationType="slide" transparent>
+      <View style={styles.modalBg}>
+        <View style={styles.modalCard}>
+          <Text style={styles.title}>Wajib: Nonaktifkan Penghemat Baterai</Text>
+          <Text style={[styles.devMeta, { marginTop: 8, lineHeight: 19 }]}>
+            Agar pelacakan lokasi latar belakang dan alarm bunyikan HP tetap berjalan 24 jam tanpa dimatikan sistem Android, silakan pilih "Izinkan / Tidak dibatasi" pada izin baterai aplikasi Lacak HP.
+          </Text>
+          <TouchableOpacity
+            style={styles.btnPrimary}
+            onPress={async () => {
+              setBatteryOpenedOnce(true);
+              await openBatterySettings();
+            }}
+          >
+            <Text style={styles.btnPrimaryText}>Buka Izin Baterai</Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={[
+              styles.btnSmall,
+              { marginTop: 10, paddingVertical: 11, alignItems: "center", opacity: batteryOpenedOnce ? 1 : 0.45 },
+            ]}
+            disabled={!batteryOpenedOnce}
+            onPress={async () => {
+              await SecureStore.setItemAsync(STORE_KEYS.BATTERY_OK, "1");
+              setBatteryPromptOpen(false);
+            }}
+          >
+            <Text style={styles.btnSmallText}>Sudah Nonaktifkan, Lanjutkan</Text>
+          </TouchableOpacity>
+        </View>
+      </View>
+    </Modal>
+  );
 
   if (booting) {
     return (
@@ -728,6 +857,7 @@ function AppInner() {
             <Text style={styles.btnPrimaryText}>{busy ? "Masuk..." : "Masuk"}</Text>
           </TouchableOpacity>
         </View>
+        {batteryModal}
       </View>
     );
   }
@@ -781,13 +911,18 @@ function AppInner() {
 
       <View style={styles.bgBar}>
         <Text style={styles.bgText}>
-          Lacak Latar Belakang ({bgActive ? "AKTIF" : "NONAKTIF"})
+          Lacak Latar Belakang ({bgActive ? "AKTIF · TERKUNCI" : "BUTUH IZIN"})
         </Text>
         <View style={styles.row}>
+          {!bgActive ? (
+            <TouchableOpacity style={styles.miniBtnAccent} onPress={ensureBackgroundPermission}>
+              <Text style={styles.chipPrimaryText}>Aktifkan Izin</Text>
+            </TouchableOpacity>
+          ) : null}
           <TouchableOpacity style={styles.miniBtn} onPress={handleSendNow}>
             <Text style={styles.miniBtnText}>Update GPS</Text>
           </TouchableOpacity>
-          <Switch value={bgActive} onValueChange={toggleBackground} />
+          <Switch value={true} disabled={true} />
         </View>
       </View>
 
@@ -998,7 +1133,10 @@ function AppInner() {
               return (
                 <View key={d.device_id} style={styles.devCard}>
                   <View style={styles.devHead}>
-                    <Text style={styles.devName}>{d.display_name || d.username}</Text>
+                    <View style={styles.row}>
+                      <View style={[styles.userColorDot, { backgroundColor: d.color || "#38bdf8" }]} />
+                      <Text style={styles.devName}>{d.display_name || d.username}</Text>
+                    </View>
                     <View style={[styles.badge, d.platform === "ios" ? styles.badgeIos : styles.badgeAnd]}>
                       <Text style={styles.badgeText}>{pLabel}</Text>
                     </View>
@@ -1128,12 +1266,20 @@ function AppInner() {
               {usersList.map((u) => (
                 <View key={u.username} style={styles.userRow}>
                   <View style={{ flex: 1 }}>
-                    <Text style={styles.devName}>{u.display_name || u.username}</Text>
-                    <Text style={styles.devMeta}>@{u.username} · {u.role}</Text>
+                    <View style={styles.row}>
+                      <View style={[styles.userColorDot, { backgroundColor: u.color || "#38bdf8" }]} />
+                      <Text style={styles.devName}>{u.display_name || u.username}</Text>
+                    </View>
+                    <Text style={styles.devMeta}>
+                      @{u.username} · {u.role}{u.logged_in ? " · aktif" : ""}
+                    </Text>
                   </View>
                   <View style={styles.row}>
                     <TouchableOpacity style={styles.btnSmall} onPress={() => startEditUser(u)}>
                       <Text style={styles.btnSmallText}>Edit</Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity style={styles.btnWarn} onPress={() => logoutUserByAdmin(u.username)}>
+                      <Text style={styles.btnWarnText}>Logout</Text>
                     </TouchableOpacity>
                     {u.username !== user.username ? (
                       <TouchableOpacity style={[styles.btnSmall, styles.btnDanger]} onPress={() => deleteUser(u.username)}>
@@ -1147,6 +1293,27 @@ function AppInner() {
           </View>
         </View>
       </Modal>
+
+      <Modal visible={Boolean(ringCaller)} animationType="fade" transparent>
+        <View style={styles.alarmBg}>
+          <View style={styles.alarmCard}>
+            <Text style={styles.alarmTitle}>HP SEDANG DILACAK!</Text>
+            <Text style={styles.alarmSub}>
+              Dibunyikan oleh {ringCaller} (Volume 100%)
+            </Text>
+            <TouchableOpacity
+              style={styles.alarmStopBtn}
+              onPress={async () => {
+                await stopLoudRing();
+                setRingCaller(null);
+              }}
+            >
+              <Text style={styles.alarmStopText}>MATIKAN SUARA</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
+      {batteryModal}
     </View>
   );
 }
@@ -1220,7 +1387,17 @@ const styles = StyleSheet.create({
   },
   bgText: { color: "#cbd5e1", fontSize: 11, fontWeight: "600" },
   miniBtn: { backgroundColor: "#334155", paddingHorizontal: 8, paddingVertical: 5, borderRadius: 7 },
+  miniBtnAccent: { backgroundColor: "#38bdf8", paddingHorizontal: 8, paddingVertical: 5, borderRadius: 7 },
   miniBtnText: { color: "#e2e8f0", fontSize: 11, fontWeight: "600" },
+  userColorDot: { width: 12, height: 12, borderRadius: 6, borderWidth: 1.5, borderColor: "#fff" },
+  btnWarn: { backgroundColor: "#f59e0b", paddingHorizontal: 8, paddingVertical: 6, borderRadius: 8 },
+  btnWarnText: { color: "#0b1220", fontSize: 11, fontWeight: "700" },
+  alarmBg: { flex: 1, backgroundColor: "rgba(127, 29, 29, 0.92)", justifyContent: "center", padding: 24 },
+  alarmCard: { backgroundColor: "#1e293b", borderRadius: 20, padding: 24, borderWidth: 2, borderColor: "#ef4444", alignItems: "center" },
+  alarmTitle: { color: "#fca5a5", fontSize: 22, fontWeight: "800", textAlign: "center" },
+  alarmSub: { color: "#f8fafc", fontSize: 14, marginTop: 8, textAlign: "center" },
+  alarmStopBtn: { backgroundColor: "#ef4444", paddingHorizontal: 28, paddingVertical: 14, borderRadius: 12, marginTop: 20, width: "100%", alignItems: "center" },
+  alarmStopText: { color: "#fff", fontSize: 16, fontWeight: "800" },
   mapWrap: { flex: 1.15, backgroundColor: "#0b1220" },
   list: { flex: 0.85, backgroundColor: "#0f172a", borderTopWidth: 1, borderTopColor: "#334155" },
   devCard: { backgroundColor: "#1e293b", borderRadius: 12, padding: 12, borderWidth: 1, borderColor: "#334155" },

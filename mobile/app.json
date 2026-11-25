@@ -3,8 +3,8 @@
     "name": "Lacak HP",
     "slug": "lacak-hp",
     "owner": "luckyfrediyanto",
-    "version": "1.1.0",
-    "runtimeVersion": "1.1.0",
+    "version": "1.2.0",
+    "runtimeVersion": "1.2.0",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "splash": {
@@ -28,7 +28,8 @@
         "NSLocationWhenInUseUsageDescription": "Aplikasi membutuhkan lokasi untuk menampilkan posisi HP Anda di peta realtime.",
         "NSLocationAlwaysAndWhenInUseUsageDescription": "Aplikasi membutuhkan lokasi latar belakang agar HP tetap terlacak saat layar mati atau aplikasi ditutup.",
         "UIBackgroundModes": [
-          "location"
+          "location",
+          "audio"
         ]
       }
     },
@@ -46,12 +47,18 @@
         "FOREGROUND_SERVICE_LOCATION",
         "WAKE_LOCK",
         "POST_NOTIFICATIONS",
+        "VIBRATE",
+        "MODIFY_AUDIO_SETTINGS",
+        "REQUEST_IGNORE_BATTERY_OPTIMIZATIONS",
         "android.permission.ACCESS_COARSE_LOCATION",
         "android.permission.ACCESS_FINE_LOCATION",
         "android.permission.ACCESS_BACKGROUND_LOCATION",
         "android.permission.FOREGROUND_SERVICE",
         "android.permission.FOREGROUND_SERVICE_LOCATION",
-        "android.permission.POST_NOTIFICATIONS"
+        "android.permission.POST_NOTIFICATIONS",
+        "android.permission.VIBRATE",
+        "android.permission.MODIFY_AUDIO_SETTINGS",
+        "android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS"
       ]
     },
     "plugins": [
@@ -69,7 +76,8 @@
         "expo-notifications",
         {
           "icon": "./assets/adaptive-icon.png",
-          "color": "#38bdf8"
+          "color": "#38bdf8",
+          "sounds": ["./assets/alarm.wav"]
         }
       ],
       "expo-secure-store"

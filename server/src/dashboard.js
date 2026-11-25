@@ -44,8 +44,11 @@ export const DASHBOARD_HTML = `<!doctype html>
   .modal-bg { position:fixed; inset:0; background:rgba(0,0,0,.65); display:flex; align-items:center; justify-content:center; padding:16px; z-index:1000; }
   .modal { width:100%; max-width:440px; max-height:86vh; overflow:auto; background:var(--card); border:1px solid var(--line); border-radius:14px; padding:18px; }
   .user-row { display:flex; justify-content:space-between; align-items:center; gap:8px; padding:8px 0; border-bottom:1px solid var(--line); font-size:13px; }
-  .pin-label { background:#0f172a; color:#fff; border:2px solid #38bdf8; border-radius:999px; padding:3px 9px; font-weight:700; font-size:12px; white-space:nowrap; box-shadow:0 2px 8px rgba(0,0,0,.45); }
-  .place-label { background:rgba(15,23,42,.9); color:#7dd3fc; border:1px solid #38bdf8; border-radius:8px; padding:2px 7px; font-weight:700; font-size:11px; white-space:nowrap; }
+  .user-pin { width:34px; height:34px; border-radius:50%; border:3px solid #fff; display:flex; align-items:center; justify-content:center; box-shadow:0 3px 10px rgba(0,0,0,.55); position:relative; }
+  .user-pin svg { width:18px; height:18px; fill:#fff; }
+  .user-pin .st { width:10px; height:10px; border-radius:50%; border:2px solid #0f172a; position:absolute; right:-2px; bottom:-2px; background:#22c55e; }
+  .user-pin .st.off { background:#94a3b8; }
+  .color-dot { width:11px; height:11px; border-radius:50%; display:inline-block; margin-right:6px; vertical-align:middle; }
   .toast { position:fixed; top:66px; left:50%; transform:translateX(-50%); background:#0f172a; border:1px solid #38bdf8; color:#fff; padding:10px 14px; border-radius:12px; z-index:900; font-size:13px; font-weight:600; box-shadow:0 6px 24px rgba(0,0,0,.45); }
 </style>
 </head>
@@ -195,35 +198,25 @@ function renderPlaces() {
   if (!map) return;
   placeLayers.forEach((l) => map.removeLayer(l));
   placeLayers = [];
-  places.forEach((p) => {
-    const circle = L.circle([p.lat, p.lng], {
-      radius: p.radius,
-      color: "#38bdf8",
-      fillColor: "#38bdf8",
-      fillOpacity: 0.14,
-      weight: 2
-    }).addTo(map);
-    const label = L.marker([p.lat, p.lng], {
-      interactive: false,
-      icon: L.divIcon({ className: "", html: '<div class="place-label">' + esc(p.name) + " (" + p.radius + "m)</div>", iconAnchor: [35, 12] })
-    }).addTo(map);
-    placeLayers.push(circle, label);
-  });
 }
 
 function upsertMarker(d) {
   if (d.platform !== "ios" && d.platform !== "android") return;
   devices.set(d.device_id, d);
-  const label = (d.display_name || d.username) + " · " + (d.platform === "ios" ? "iOS" : "Android");
+  const online = Date.now() - (d.last_seen || d.updated_at) < 90000;
+  const col = d.color || "#38bdf8";
+  const tip = (d.display_name || d.username) + " (" + (d.platform === "ios" ? "iOS" : "Android") + ")";
+  const svg = '<svg viewBox="0 0 24 24"><path d="M12 12c2.7 0 5-2.3 5-5s-2.3-5-5-5-5 2.3-5 5 2.3 5 5 5zm0 2c-3.3 0-10 1.7-10 5v3h20v-3c0-3.3-6.7-5-10-5z"/></svg>';
   const icon = L.divIcon({
     className: "",
-    html: '<div class="pin-label">' + esc(label) + "</div>",
-    iconAnchor: [55, 14]
+    html: '<div class="user-pin" title="' + esc(tip) + '" style="background:' + esc(col) + '">' + svg + '<span class="st ' + (online ? "" : "off") + '"></span></div>',
+    iconSize: [34, 34],
+    iconAnchor: [17, 17]
   });
   if (markers.has(d.device_id)) {
     markers.get(d.device_id).setLatLng([d.lat, d.lng]).setIcon(icon);
   } else {
-    markers.set(d.device_id, L.marker([d.lat, d.lng], { icon }).addTo(map));
+    markers.set(d.device_id, L.marker([d.lat, d.lng], { icon }).bindTooltip(esc(tip)).addTo(map));
   }
   renderDevices();
 }
@@ -273,7 +266,7 @@ function renderDevices() {
     const pLabel = d.platform === "ios" ? "iOS" : "Android";
     const placeTxt = d.current_place ? " · Di " + esc(d.current_place) : "";
     return '<div class="dev">' +
-      '<div class="dev-top"><span class="dev-name">' + esc(d.display_name || d.username) + '</span><span class="badge ' + esc(d.platform) + '">' + pLabel + '</span></div>' +
+      '<div class="dev-top"><span class="dev-name"><span class="color-dot" style="background:' + esc(d.color || "#38bdf8") + '"></span>' + esc(d.display_name || d.username) + '</span><span class="badge ' + esc(d.platform) + '">' + pLabel + '</span></div>' +
       '<div class="meta">' + esc(d.device_name) + placeTxt + '<br>' +
       (online ? "● Online" : "○ Offline") + " · " + ago(d.updated_at) + " · Baterai " + bat + " · Akurasi " + acc + '</div>' +
       '<div class="dev-btns">' +
@@ -382,7 +375,7 @@ document.getElementById("loginForm").onsubmit = async (e) => {
   try {
     const data = await api("/api/auth/login", {
       method: "POST",
-      body: JSON.stringify({ username: document.getElementById("u").value, password: document.getElementById("p").value })
+      body: JSON.stringify({ username: document.getElementById("u").value, password: document.getElementById("p").value, client_type: "web" })
     });
     token = data.token;
     localStorage.setItem(LS_TOKEN, token);
@@ -424,12 +417,20 @@ function resetUserForm() {
 async function loadUsers() {
   const { users } = await api("/api/users");
   document.getElementById("usersList").innerHTML = users.map((u) =>
-    '<div class="user-row"><div><strong>' + esc(u.display_name || u.username) + '</strong> <span class="meta">(@' + esc(u.username) + ' · ' + esc(u.role) + ')</span></div>' +
-    '<div style="display:flex;gap:6px"><button class="sec" type="button" onclick="editUser(\\'' + esc(u.username) + '\\',\\'' + esc(u.display_name || u.username) + '\\',\\'' + esc(u.role) + '\\')">Edit</button>' +
+    '<div class="user-row"><div><span class="color-dot" style="background:' + esc(u.color || "#38bdf8") + '"></span><strong>' + esc(u.display_name || u.username) + '</strong> <span class="meta">(@' + esc(u.username) + ' · ' + esc(u.role) + (u.logged_in ? ' · aktif' : '') + ')</span></div>' +
+    '<div style="display:flex;gap:5px"><button class="sec" type="button" onclick="editUser(\\'' + esc(u.username) + '\\',\\'' + esc(u.display_name || u.username) + '\\',\\'' + esc(u.role) + '\\')">Edit</button>' +
+    '<button class="sec" type="button" onclick="logoutUser(\\'' + esc(u.username) + '\\')">Logout</button>' +
     (u.username === me.username ? "" : '<button class="danger" type="button" onclick="delUser(\\'' + esc(u.username) + '\\')">Hapus</button>') +
     '</div></div>'
   ).join("");
 }
+
+window.logoutUser = async (u) => {
+  if (!confirm("Logout paksa user @" + u + "?")) return;
+  await api("/api/users/" + encodeURIComponent(u) + "/logout", { method: "POST" });
+  showToast("User @" + u + " telah di-logout");
+  await loadUsers();
+};
 
 window.editUser = (u, n, r) => {
   document.getElementById("editOriginalU").value = u;

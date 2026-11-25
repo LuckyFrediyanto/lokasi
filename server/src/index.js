@@ -12,6 +12,19 @@ export class LocationHubDO extends DurableObject {
   }
 
   broadcast(payload) {
+    if (payload && payload.type === "force_logout") {
+      for (const ws of this.ctx.getWebSockets(payload.username)) {
+        try {
+          const att = ws.deserializeAttachment();
+          if (payload.except_token && att && att.token === payload.except_token) continue;
+          ws.send(JSON.stringify({ type: "force_logout", username: payload.username }));
+          ws.close(4001, "Sesi diakhiri");
+        } catch {
+          try { ws.close(); } catch {}
+        }
+      }
+      return;
+    }
     const encoded = JSON.stringify(payload);
     for (const ws of this.ctx.getWebSockets()) {
       try {

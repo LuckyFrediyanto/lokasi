@@ -6,21 +6,17 @@ export const MAP_HTML = `<!doctype html>
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
 <style>
   html,body,#map { margin:0; padding:0; width:100%; height:100%; background:#0f172a; }
-  .pin {
-    background:#0f172a; color:#fff; border:2px solid #38bdf8;
-    border-radius:999px; padding:4px 10px; font:700 12px/1.2 -apple-system,sans-serif;
-    white-space:nowrap; box-shadow:0 2px 10px rgba(0,0,0,.5);
-    display:inline-flex; align-items:center; gap:5px;
+  .user-pin {
+    width:36px; height:36px; border-radius:50%; border:3px solid #fff;
+    display:flex; align-items:center; justify-content:center;
+    box-shadow:0 3px 10px rgba(0,0,0,.55); position:relative;
   }
-  .pin.ios { border-color:#60a5fa; }
-  .pin.android { border-color:#4ade80; }
-  .dot { width:8px; height:8px; border-radius:50%; background:#22c55e; }
-  .dot.old { background:#94a3b8; }
-  .place-tag {
-    background:rgba(15,23,42,.92); color:#7dd3fc; border:1px solid #38bdf8;
-    border-radius:8px; padding:2px 7px; font:700 11px/1.2 -apple-system,sans-serif;
-    white-space:nowrap; box-shadow:0 2px 6px rgba(0,0,0,.45);
+  .user-pin svg { width:20px; height:20px; fill:#fff; }
+  .user-pin .st {
+    width:11px; height:11px; border-radius:50%; border:2px solid #0f172a;
+    position:absolute; right:-2px; bottom:-2px; background:#22c55e;
   }
+  .user-pin .st.old { background:#94a3b8; }
   .pick-pin {
     background:#f59e0b; color:#0f172a; border:2px solid #fff;
     border-radius:999px; padding:4px 10px; font:700 11px/1.2 -apple-system,sans-serif;
@@ -44,13 +40,14 @@ L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
 }).addTo(map);
 
 const markers = new Map();
-let placeLayers = [];
 let historyLayers = [];
 let highlightLayer = null;
 let didAutoCenter = false;
 let pickActive = false;
 let pickMarker = null;
 let pickCircle = null;
+
+const USER_SVG = '<svg viewBox="0 0 24 24"><path d="M12 12c2.7 0 5-2.3 5-5s-2.3-5-5-5-5 2.3-5 5 2.3 5 5 5zm0 2c-3.3 0-10 1.7-10 5v3h20v-3c0-3.3-6.7-5-10-5z"/></svg>';
 
 function esc(v) {
   return String(v ?? "").replace(/[&<>"']/g, (c) => ({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;" }[c]));
@@ -109,38 +106,15 @@ window.setPickMode = function(active, lat, lng, radius) {
   map.setView([tLat, tLng], Math.max(map.getZoom(), 16), { animate: true });
 };
 
-window.updatePlaces = function(list) {
-  placeLayers.forEach((l) => map.removeLayer(l));
-  placeLayers = [];
-  (list || []).forEach((p) => {
-    const circle = L.circle([p.lat, p.lng], {
-      radius: p.radius,
-      color: "#38bdf8",
-      fillColor: "#38bdf8",
-      fillOpacity: 0.14,
-      weight: 2
-    }).addTo(map);
-    const label = L.marker([p.lat, p.lng], {
-      interactive: false,
-      icon: L.divIcon({
-        className: "",
-        html: '<div class="place-tag">' + esc(p.name) + ' · ' + p.radius + 'm</div>',
-        iconAnchor: [35, 12]
-      })
-    }).addTo(map);
-    placeLayers.push(circle, label);
-  });
-};
-
 window.updateDevices = function(list) {
   const seen = new Set();
   (list || []).forEach((d) => {
     if (d.platform !== "ios" && d.platform !== "android") return;
     seen.add(d.device_id);
     const online = Date.now() - (d.last_seen || d.updated_at) < 90000;
-    const label = (d.display_name || d.username) + " · " + (d.platform === "ios" ? "iOS" : "Android");
-    const html = '<div class="pin ' + esc(d.platform) + '"><span class="dot ' + (online ? "" : "old") + '"></span>' + esc(label) + '</div>';
-    const icon = L.divIcon({ className: "", html, iconAnchor: [55, 14] });
+    const col = d.color || "#38bdf8";
+    const html = '<div class="user-pin" style="background:' + esc(col) + '">' + USER_SVG + '<span class="st ' + (online ? "" : "old") + '"></span></div>';
+    const icon = L.divIcon({ className: "", html, iconSize: [36, 36], iconAnchor: [18, 18] });
     if (markers.has(d.device_id)) {
       markers.get(d.device_id).setLatLng([d.lat, d.lng]).setIcon(icon);
     } else {

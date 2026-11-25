@@ -10,6 +10,20 @@ const USERNAME_RE = /^[a-z]{2,32}$/;
 const DEVICE_ID_RE = /^[a-zA-Z0-9._:-]{2,80}$/;
 const MOBILE_PLATFORMS = new Set(["ios", "android"]);
 const ALLOWED_RADII = new Set([20, 50, 100, 200]);
+const USER_COLORS = [
+  "#38bdf8", "#22c55e", "#f59e0b", "#ec4899",
+  "#a855f7", "#ef4444", "#14b8a6", "#f97316",
+  "#6366f1", "#84cc16", "#06b6d4", "#e11d48",
+];
+
+export function userColor(username) {
+  const s = String(username || "");
+  let h = 0;
+  for (let i = 0; i < s.length; i++) {
+    h = (h * 31 + s.charCodeAt(i)) >>> 0;
+  }
+  return USER_COLORS[h % USER_COLORS.length];
+}
 
 const encoder = new TextEncoder();
 
@@ -282,6 +296,13 @@ export class LocationHubCore {
       "UPDATE users SET display_name = CASE WHEN username = 'admin' THEN 'Admin' ELSE username END WHERE display_name = '' OR display_name IS NULL"
     );
 
+    const sessCols = new Set(
+      this.sql.exec("PRAGMA table_info(sessions)").toArray().map((c) => c.name)
+    );
+    if (!sessCols.has("client_type")) {
+      this.sql.exec("ALTER TABLE sessions ADD COLUMN client_type TEXT NOT NULL DEFAULT 'mobile'");
+    }
+
     const locCols = new Set(
       this.sql.exec("PRAGMA table_info(locations)").toArray().map((c) => c.name)
     );
@@ -413,6 +434,7 @@ export class LocationHubCore {
       return {
         ...r,
         display_name: r.display_name || r.username,
+        color: userColor(r.username),
         last_seen: seen,
         online: now - seen < ONLINE_WINDOW_MS,
       };
@@ -688,6 +710,7 @@ export class LocationHubCore {
       device_id: deviceId,
       username: user.username,
       display_name: user.display_name,
+      color: userColor(user.username),
       platform,
       device_name: deviceName,
       lat,
@@ -938,10 +961,37 @@ export class LocationHubCore {
       const now = Date.now();
       const token = randomToken();
       const expiresAt = now + SESSION_TTL_MS;
+      const clientType = body.client_type === "web" ? "web" : "mobile";
       this.purgeExpiredSessionsAndDevices();
+      if (clientType === "mobile") {
+        const oldDevs = this.sql.exec(
+          "SELECT device_id FROM locations WHERE username = ?",
+          rows[0].username
+        ).toArray();
+        this.sql.exec(
+          "DELETE FROM sessions WHERE username = ? AND client_type = 'mobile'",
+          rows[0].username
+        );
+        for (const d of oldDevs) {
+          this.sql.exec("DELETE FROM locations WHERE device_id = ?", d.device_id);
+          this.sql.exec("DELETE FROM device_place_state WHERE device_id = ?", d.device_id);
+          this.broadcast({ type: "device_removed", device_id: d.device_id });
+        }
+        this.broadcast({
+          type: "force_logout",
+          username: rows[0].username,
+          client_type: "mobile",
+          except_token: token,
+        });
+      } else {
+        this.sql.exec(
+          "DELETE FROM sessions WHERE username = ? AND client_type = 'web'",
+          rows[0].username
+        );
+      }
       this.sql.exec(
-        "INSERT INTO sessions (token, username, created_at, expires_at) VALUES (?, ?, ?, ?)",
-        token, rows[0].username, now, expiresAt
+        "INSERT INTO sessions (token, username, created_at, expires_at, client_type) VALUES (?, ?, ?, ?, ?)",
+        token, rows[0].username, now, expiresAt, clientType
       );
       return json({
         token,
@@ -949,6 +999,7 @@ export class LocationHubCore {
         user: {
           username: rows[0].username,
           display_name: rows[0].display_name || rows[0].username,
+          color: userColor(rows[0].username),
           role: rows[0].role,
         },
       });
@@ -1164,10 +1215,39 @@ export class LocationHubCore {
 
     if (path === "/api/users" && request.method === "GET") {
       if (user.role !== "admin") return json({ error: "Khusus admin" }, 403);
+      const now = Date.now();
       const users = this.sql.exec(
-        "SELECT username, display_name, role, created_at FROM users ORDER BY created_at ASC"
-      ).toArray();
+        `SELECT u.username, u.display_name, u.role, u.created_at,
+                EXISTS(SELECT 1 FROM sessions s WHERE s.username = u.username AND s.expires_at > ?) AS has_session
+         FROM users u
+         ORDER BY u.created_at ASC`,
+        now
+      ).toArray().map((u) => ({
+        ...u,
+        color: userColor(u.username),
+        logged_in: Boolean(u.has_session),
+      }));
       return json({ users });
+    }
+
+    const userLogoutMatch = path.match(/^\/api\/users\/([^/]+)\/logout$/);
+    if (userLogoutMatch && request.method === "POST") {
+      if (user.role !== "admin") return json({ error: "Khusus admin" }, 403);
+      const target = decodeURIComponent(userLogoutMatch[1]).trim().toLowerCase();
+      const existing = this.sql.exec("SELECT username FROM users WHERE username = ?", target).toArray()[0];
+      if (!existing) return json({ error: "User tidak ditemukan" }, 404);
+      const devs = this.sql.exec(
+        "SELECT device_id FROM locations WHERE username = ?",
+        target
+      ).toArray();
+      this.sql.exec("DELETE FROM sessions WHERE username = ?", target);
+      for (const d of devs) {
+        this.sql.exec("DELETE FROM locations WHERE device_id = ?", d.device_id);
+        this.sql.exec("DELETE FROM device_place_state WHERE device_id = ?", d.device_id);
+        this.broadcast({ type: "device_removed", device_id: d.device_id });
+      }
+      this.broadcast({ type: "force_logout", username: target });
+      return json({ ok: true, username: target });
     }
 
     if (path === "/api/users" && request.method === "POST") {

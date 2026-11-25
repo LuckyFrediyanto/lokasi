@@ -179,6 +179,8 @@ res = await hub.handleApi(req("/api/auth/login", {
   body: { username: "bos", password: "barupassword" },
 }));
 assert.equal(res.status, 200);
+const bosAuth = await res.json();
+adminAuth.token = bosAuth.token;
 
 res = await hub.handleApi(req("/api/locations", { token: adminAuth.token }));
 assert.equal((await res.json()).devices.length, 1);
@@ -249,10 +251,50 @@ assert.equal(res.status, 401);
 
 res = await hub.handleApi(req("/api/auth/login", {
   method: "POST",
-  body: { username: "bos", password: "barupassword" },
+  body: { username: "bos", password: "barupassword", client_type: "mobile" },
 }));
 const freshAdmin = await res.json();
 res = await hub.handleApi(req("/api/locations", { token: freshAdmin.token }));
 assert.equal((await res.json()).devices.length, 0);
 
-console.log("ALL_V3_TESTS_PASSED");
+res = await hub.handleApi(req("/api/auth/login", {
+  method: "POST",
+  body: { username: "lucky", password: "bebas", client_type: "mobile" },
+}));
+const phone1 = await res.json();
+res = await hub.handleApi(req("/api/location", {
+  method: "POST",
+  token: phone1.token,
+  body: { device_id: "hp1", platform: "android", device_name: "HP 1", lat: -6.8, lng: 110.84 },
+}));
+assert.equal(res.status, 200);
+assert.ok((await res.json()).device.color.startsWith("#"));
+
+res = await hub.handleApi(req("/api/auth/login", {
+  method: "POST",
+  body: { username: "lucky", password: "bebas", client_type: "mobile" },
+}));
+const phone2 = await res.json();
+res = await hub.handleApi(req("/api/auth/me", { token: phone1.token }));
+assert.equal(res.status, 401);
+
+res = await hub.handleApi(req("/api/location", {
+  method: "POST",
+  token: phone2.token,
+  body: { device_id: "hp2", platform: "ios", device_name: "iPhone", lat: -6.81, lng: 110.85 },
+}));
+assert.equal(res.status, 200);
+
+res = await hub.handleApi(req("/api/users/lucky/logout", {
+  method: "POST",
+  token: freshAdmin.token,
+}));
+assert.equal(res.status, 200);
+
+res = await hub.handleApi(req("/api/auth/me", { token: phone2.token }));
+assert.equal(res.status, 401);
+
+res = await hub.handleApi(req("/api/locations", { token: freshAdmin.token }));
+assert.equal((await res.json()).devices.length, 0);
+
+console.log("ALL_V4_TESTS_PASSED");
