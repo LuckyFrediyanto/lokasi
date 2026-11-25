@@ -10,6 +10,23 @@ let activeSound = null;
 let hapticTimer = null;
 let autoStopTimer = null;
 let activeNotifId = null;
+let activeRingKey = null;
+let ringListeners = new Set();
+
+function notifyListeners(caller) {
+  for (const fn of ringListeners) {
+    try { fn(caller); } catch {}
+  }
+}
+
+export function subscribeRingState(fn) {
+  ringListeners.add(fn);
+  return () => ringListeners.delete(fn);
+}
+
+export function getActiveRingKey() {
+  return activeRingKey;
+}
 
 async function forceMaxVolume() {
   try {
@@ -29,8 +46,13 @@ async function forceMaxVolume() {
   } catch {}
 }
 
-export async function startLoudRing(callerName, onAutoStop = null) {
+export async function startLoudRing(callerName, onAutoStop = null, ringKey = null) {
+  if (ringKey && activeRingKey === ringKey && activeSound) {
+    return;
+  }
   await stopLoudRing();
+  activeRingKey = ringKey || String(Date.now());
+  notifyListeners(callerName || "Pengguna");
   await forceMaxVolume();
 
   try {
@@ -69,7 +91,7 @@ export async function startLoudRing(callerName, onAutoStop = null) {
     activeNotifId = await Notifications.scheduleNotificationAsync({
       content: {
         title: "Panggilan Lacak HP",
-        body: `Perangkat ini dibunyikan oleh ${callerName}`,
+        body: `Perangkat ini dibunyikan oleh ${callerName} (Ketuk untuk hentikan)`,
         sound: "alarm.wav",
         priority: Notifications.AndroidNotificationPriority.MAX,
         ...(Platform.OS === "android" ? { channelId: "alarm-ring" } : {}),
@@ -80,6 +102,7 @@ export async function startLoudRing(callerName, onAutoStop = null) {
 }
 
 export async function stopLoudRing() {
+  activeRingKey = null;
   if (autoStopTimer) {
     clearTimeout(autoStopTimer);
     autoStopTimer = null;
@@ -102,4 +125,5 @@ export async function stopLoudRing() {
     activeNotifId = null;
     try { await Notifications.dismissNotificationAsync(id); } catch {}
   }
+  notifyListeners(null);
 }

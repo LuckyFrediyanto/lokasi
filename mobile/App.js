@@ -29,7 +29,7 @@ import * as ImagePicker from "expo-image-picker";
 import * as ImageManipulator from "expo-image-manipulator";
 import { WebView } from "react-native-webview";
 import { SERVER_URL, STORE_KEYS, toWsUrl } from "./src/config";
-import { startLoudRing, stopLoudRing } from "./src/alarm";
+import { startLoudRing, stopLoudRing, subscribeRingState } from "./src/alarm";
 import {
   apiRequest,
   clearSession,
@@ -38,6 +38,7 @@ import {
   saveSession,
 } from "./src/api";
 import {
+  checkPendingRingNow,
   getCurrentCoords,
   isBackgroundTrackingActive,
   sendCurrentLocationNow,
@@ -329,6 +330,10 @@ function AppInner() {
     panelModeRef.current = panelMode;
   }, [panelMode]);
 
+  useEffect(() => {
+    return subscribeRingState((caller) => setRingCaller(caller));
+  }, []);
+
   function showToast(text) {
     setToastMsg(text);
     if (toastTimer.current) clearTimeout(toastTimer.current);
@@ -405,6 +410,7 @@ function AppInner() {
           setupNotifications();
           const track = await startBackgroundTracking();
           setBgActive(track.ok);
+          checkPendingRingNow().catch(() => {});
         } catch {
           await clearSession();
         }
@@ -522,8 +528,9 @@ function AppInner() {
             const fullMyId = `${user.username}:${myDeviceId}`;
             if (msg.target_device_id === fullMyId || msg.target_username === user.username) {
               const caller = msg.from_display_name || msg.from_username;
+              const ringKey = msg.started_at ? String(msg.started_at) : String(msg.at || Date.now());
               setRingCaller(caller);
-              startLoudRing(caller, () => setRingCaller(null));
+              startLoudRing(caller, () => setRingCaller(null), ringKey);
             }
           } else if (msg.type === "stop_ring") {
             const fullMyId = `${user.username}:${myDeviceId}`;
@@ -1798,6 +1805,12 @@ function AppInner() {
               onPress={async () => {
                 await stopLoudRing();
                 setRingCaller(null);
+                if (token && user && myDeviceId) {
+                  apiRequest(`/api/locations/${encodeURIComponent(`${user.username}:${myDeviceId}`)}/stop-ping`, {
+                    method: "POST",
+                    token,
+                  }).catch(() => {});
+                }
               }}
             >
               <Text style={styles.alarmStopText}>Hentikan</Text>

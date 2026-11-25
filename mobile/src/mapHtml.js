@@ -9,16 +9,36 @@ export const MAP_HTML = `<!doctype html>
 <style>
   html,body,#map { margin:0; padding:0; width:100%; height:100%; background:#e2e8f0; }
   .user-pin {
-    width:36px; height:36px; border-radius:50%; border:3px solid #fff;
+    width:38px; height:38px; border-radius:50%; border:3px solid #fff;
     display:flex; align-items:center; justify-content:center;
-    box-shadow:0 3px 10px rgba(15,23,42,.35); position:relative;
+    box-shadow:0 3px 10px rgba(15,23,42,.38); position:relative;
+    box-sizing:border-box;
   }
   .user-pin svg { width:20px; height:20px; fill:#fff; }
+  .user-pin img { width:100%; height:100%; object-fit:cover; border-radius:50%; display:block; }
   .user-pin .st {
     width:11px; height:11px; border-radius:50%; border:2px solid #fff;
     position:absolute; right:-2px; bottom:-2px; background:#22c55e;
   }
   .user-pin .st.old { background:#94a3b8; }
+  .cluster-pill {
+    display:inline-flex; align-items:center; gap:3px;
+    padding:3px; background:#ffffff; border:2.5px solid #ffffff;
+    border-radius:999px; box-shadow:0 4px 14px rgba(15,23,42,.36);
+    box-sizing:border-box;
+  }
+  .cluster-av {
+    width:32px; height:32px; border-radius:50%;
+    display:flex; align-items:center; justify-content:center;
+    position:relative; flex-shrink:0; overflow:visible;
+  }
+  .cluster-av svg { width:17px; height:17px; fill:#fff; }
+  .cluster-av img { width:100%; height:100%; object-fit:cover; border-radius:50%; display:block; }
+  .cluster-av .st {
+    width:9px; height:9px; border-radius:50%; border:1.5px solid #fff;
+    position:absolute; right:-1px; bottom:-1px; background:#22c55e;
+  }
+  .cluster-av .st.old { background:#94a3b8; }
   .pick-pin {
     background:#f59e0b; color:#0f172a; border:2px solid #fff;
     border-radius:999px; padding:4px 10px; font:700 11px/1.2 -apple-system,sans-serif;
@@ -43,7 +63,8 @@ L.tileLayer("${SERVER_URL}/api/tile/{z}/{x}/{y}.png", {
 setTimeout(() => map.invalidateSize(), 150);
 setTimeout(() => map.invalidateSize(), 700);
 
-const markers = new Map();
+let currentDevices = [];
+let clusterMarkers = [];
 let historyLayers = [];
 let highlightLayer = null;
 let didAutoCenter = false;
@@ -75,6 +96,9 @@ map.on("click", function(e) {
 });
 map.on("dragstart", function() {
   sendMsg({ type: "map_interact" });
+});
+map.on("zoomend", function() {
+  renderDeviceGroups();
 });
 
 function updatePickVisual(lat, lng, radius) {
@@ -116,44 +140,91 @@ window.setPickMode = function(active, lat, lng, radius) {
   map.setView([tLat, tLng], Math.max(map.getZoom(), 16), { animate: true });
 };
 
-window.updateDevices = function(list) {
-  const seen = new Set();
-  (list || []).forEach((d) => {
-    if (d.platform !== "ios" && d.platform !== "android") return;
-    seen.add(d.device_id);
-    const online = Date.now() - (d.last_seen || d.updated_at) < 90000;
-    const col = d.color || "#0284c7";
-    const inner = d.photo
-      ? '<img src="' + esc(d.photo) + '" style="width:100%;height:100%;object-fit:cover;border-radius:50%" alt="" />'
-      : USER_SVG;
-    const html = '<div class="user-pin" style="background:' + esc(col) + '">' + inner + '<span class="st ' + (online ? "" : "old") + '"></span></div>';
-    const icon = L.divIcon({ className: "", html, iconSize: [36, 36], iconAnchor: [18, 18] });
-    if (markers.has(d.device_id)) {
-      markers.get(d.device_id).setLatLng([d.lat, d.lng]).setIcon(icon);
-    } else {
-      const m = L.marker([d.lat, d.lng], { icon }).addTo(map);
-      m.on("click", () => sendMsg({ type: "select", device_id: d.device_id }));
-      markers.set(d.device_id, m);
+function renderDeviceGroups() {
+  clusterMarkers.forEach((m) => map.removeLayer(m));
+  clusterMarkers = [];
+  const list = currentDevices;
+  if (!list.length) return;
+
+  const THRESHOLD_PX = 42;
+  const zoom = map.getZoom();
+  const groups = [];
+
+  for (const d of list) {
+    const pt = map.project([d.lat, d.lng], zoom);
+    let targetGroup = null;
+    for (const g of groups) {
+      const dx = pt.x - g.cx;
+      const dy = pt.y - g.cy;
+      if (Math.hypot(dx, dy) <= THRESHOLD_PX) {
+        targetGroup = g;
+        break;
+      }
     }
-  });
-  for (const [id, m] of markers.entries()) {
-    if (!seen.has(id)) {
-      map.removeLayer(m);
-      markers.delete(id);
+    if (targetGroup) {
+      targetGroup.items.push(d);
+      const n = targetGroup.items.length;
+      targetGroup.cx = (targetGroup.cx * (n - 1) + pt.x) / n;
+      targetGroup.cy = (targetGroup.cy * (n - 1) + pt.y) / n;
+    } else {
+      groups.push({ cx: pt.x, cy: pt.y, items: [d] });
     }
   }
-  if (!didAutoCenter && list && list.length) {
-    didAutoCenter = true;
-    if (list.length === 1) {
-      map.setView([list[0].lat, list[0].lng], 16);
+
+  for (const g of groups) {
+    const avgLat = g.items.reduce((s, d) => s + d.lat, 0) / g.items.length;
+    const avgLng = g.items.reduce((s, d) => s + d.lng, 0) / g.items.length;
+
+    if (g.items.length === 1) {
+      const d = g.items[0];
+      const online = Date.now() - (d.last_seen || d.updated_at) < 90000;
+      const col = d.color || "#0284c7";
+      const inner = d.photo ? '<img src="' + esc(d.photo) + '" alt="" />' : USER_SVG;
+      const html = '<div class="user-pin" style="background:' + esc(col) + '">' + inner + '<span class="st ' + (online ? "" : "old") + '"></span></div>';
+      const icon = L.divIcon({ className: "", html, iconSize: [38, 38], iconAnchor: [19, 19] });
+      const m = L.marker([d.lat, d.lng], { icon }).addTo(map);
+      m.on("click", () => sendMsg({ type: "select", device_id: d.device_id }));
+      clusterMarkers.push(m);
     } else {
-      map.fitBounds(list.map((d) => [d.lat, d.lng]), { padding: [40, 40] });
+      const itemsHtml = g.items.map((d) => {
+        const online = Date.now() - (d.last_seen || d.updated_at) < 90000;
+        const col = d.color || "#0284c7";
+        const inner = d.photo ? '<img src="' + esc(d.photo) + '" alt="" />' : USER_SVG;
+        return '<div class="cluster-av" style="background:' + esc(col) + '">' + inner + '<span class="st ' + (online ? "" : "old") + '"></span></div>';
+      }).join("");
+      const width = g.items.length * 32 + (g.items.length - 1) * 3 + 11;
+      const height = 43;
+      const html = '<div class="cluster-pill">' + itemsHtml + '</div>';
+      const icon = L.divIcon({ className: "", html, iconSize: [width, height], iconAnchor: [width / 2, height / 2] });
+      const m = L.marker([avgLat, avgLng], { icon }).addTo(map);
+      m.on("click", () => {
+        const bounds = L.latLngBounds(g.items.map((d) => [d.lat, d.lng]));
+        if (bounds.getNorthEast().equals(bounds.getSouthWest())) {
+          map.setView([avgLat, avgLng], Math.min(20, map.getZoom() + 2), { animate: true });
+        } else {
+          map.fitBounds(bounds, { padding: [70, 70], maxZoom: 19 });
+        }
+      });
+      clusterMarkers.push(m);
+    }
+  }
+}
+
+window.updateDevices = function(list) {
+  currentDevices = (list || []).filter((d) => d.platform === "ios" || d.platform === "android");
+  renderDeviceGroups();
+  if (!didAutoCenter && currentDevices.length) {
+    didAutoCenter = true;
+    if (currentDevices.length === 1) {
+      map.setView([currentDevices[0].lat, currentDevices[0].lng], 16);
+    } else {
+      map.fitBounds(currentDevices.map((d) => [d.lat, d.lng]), { padding: [50, 50] });
     }
   }
 };
 
 window.focusDevice = function(lat, lng) {
-  map.setView([lat, lng], 17, { animate: true });
+  map.setView([lat, lng], 18, { animate: true });
 };
 
 window.setHistoryRoute = function(points, segments) {

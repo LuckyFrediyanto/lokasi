@@ -290,6 +290,14 @@ export class LocationHubCore {
         label TEXT NOT NULL,
         updated_at INTEGER NOT NULL
       );
+      CREATE TABLE IF NOT EXISTS active_rings (
+        device_id TEXT PRIMARY KEY,
+        username TEXT NOT NULL,
+        from_username TEXT NOT NULL,
+        from_display_name TEXT NOT NULL,
+        started_at INTEGER NOT NULL,
+        expires_at INTEGER NOT NULL
+      );
     `);
 
     const userCols = new Set(
@@ -993,6 +1001,21 @@ export class LocationHubCore {
     };
   }
 
+  getActiveRing(deviceId, username) {
+    const now = Date.now();
+    this.sql.exec("DELETE FROM active_rings WHERE expires_at <= ?", now);
+    const row = this.sql.exec(
+      `SELECT device_id, username, from_username, from_display_name, started_at, expires_at
+       FROM active_rings
+       WHERE (device_id = ? OR username = ?) AND expires_at > ?
+       ORDER BY started_at DESC LIMIT 1`,
+      deviceId,
+      username,
+      now
+    ).toArray()[0];
+    return row || null;
+  }
+
   async readJson(request) {
     try {
       const data = await request.json();
@@ -1167,7 +1190,19 @@ export class LocationHubCore {
       if (!body) return json({ error: "Payload JSON tidak valid" }, 400);
       const result = this.saveLocation(user, body);
       if (result.error) return json({ error: result.error }, result.status);
-      return json({ ok: true, device: result.device });
+      const activeRing = this.getActiveRing(result.device.device_id, user.username);
+      return json({ ok: true, device: result.device, active_ring: activeRing });
+    }
+
+    if (path === "/api/ring/pending" && request.method === "GET") {
+      const devParam = url.searchParams.get("device_id") || "";
+      const fullDevId = devParam.startsWith(`${user.username}:`)
+        ? devParam
+        : devParam
+          ? `${user.username}:${devParam}`
+          : "";
+      const activeRing = this.getActiveRing(fullDevId, user.username);
+      return json({ active_ring: activeRing });
     }
 
     if (path === "/api/locations" && request.method === "GET") {
@@ -1204,15 +1239,34 @@ export class LocationHubCore {
         deviceId
       ).toArray();
       if (!exists.length) return json({ error: "Perangkat tidak ditemukan" }, 404);
+      const now = Date.now();
+      const expiresAt = now + 35000;
+      this.sql.exec(
+        `INSERT INTO active_rings (device_id, username, from_username, from_display_name, started_at, expires_at)
+         VALUES (?, ?, ?, ?, ?, ?)
+         ON CONFLICT(device_id) DO UPDATE SET
+           username = excluded.username,
+           from_username = excluded.from_username,
+           from_display_name = excluded.from_display_name,
+           started_at = excluded.started_at,
+           expires_at = excluded.expires_at`,
+        deviceId,
+        exists[0].username,
+        user.username,
+        user.display_name,
+        now,
+        expiresAt
+      );
       this.broadcast({
         type: "ring",
         target_device_id: deviceId,
         target_username: exists[0].username,
         from_username: user.username,
         from_display_name: user.display_name,
-        at: Date.now(),
+        started_at: now,
+        at: now,
       });
-      return json({ ok: true });
+      return json({ ok: true, started_at: now });
     }
 
     const stopPingMatch = path.match(/^\/api\/locations\/([^/]+)\/stop-ping$/);
@@ -1223,6 +1277,11 @@ export class LocationHubCore {
         deviceId
       ).toArray();
       if (!exists.length) return json({ error: "Perangkat tidak ditemukan" }, 404);
+      this.sql.exec(
+        "DELETE FROM active_rings WHERE device_id = ? OR username = ?",
+        deviceId,
+        exists[0].username
+      );
       this.broadcast({
         type: "stop_ring",
         target_device_id: deviceId,

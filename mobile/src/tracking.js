@@ -3,6 +3,7 @@ import * as TaskManager from "expo-task-manager";
 import * as Battery from "expo-battery";
 import { Platform } from "react-native";
 import { apiRequest, getDeviceDisplayName, getOrCreateDeviceId, getSession } from "./api";
+import { getActiveRingKey, startLoudRing, stopLoudRing } from "./alarm";
 
 export const LOCATION_TASK_NAME = "LACAK_HP_BACKGROUND_LOCATION";
 
@@ -21,12 +22,26 @@ async function readBattery() {
   }
 }
 
+async function handleRingFromResponse(res) {
+  if (!res) return;
+  const ring = res.active_ring;
+  if (ring && ring.started_at) {
+    const key = String(ring.started_at);
+    if (getActiveRingKey() !== key) {
+      const caller = ring.from_display_name || ring.from_username || "Pengguna";
+      await startLoudRing(caller, null, key);
+    }
+  } else if (getActiveRingKey()) {
+    await stopLoudRing();
+  }
+}
+
 export async function pushLocationPayload(coords, timestamp = Date.now()) {
   if (Platform.OS !== "ios" && Platform.OS !== "android") return null;
   const { token } = await getSession();
   if (!token) return null;
   const [deviceId, power] = await Promise.all([getOrCreateDeviceId(), readBattery()]);
-  return apiRequest("/api/location", {
+  const res = await apiRequest("/api/location", {
     method: "POST",
     token,
     body: {
@@ -44,12 +59,32 @@ export async function pushLocationPayload(coords, timestamp = Date.now()) {
       timestamp,
     },
   });
+  await handleRingFromResponse(res);
+  return res;
+}
+
+export async function checkPendingRingNow() {
+  try {
+    const { token } = await getSession();
+    if (!token) return;
+    const deviceId = await getOrCreateDeviceId();
+    const res = await apiRequest(`/api/ring/pending?device_id=${encodeURIComponent(deviceId)}`, {
+      token,
+    });
+    await handleRingFromResponse(res);
+  } catch {}
 }
 
 TaskManager.defineTask(LOCATION_TASK_NAME, async ({ data, error }) => {
-  if (error || !data || !Array.isArray(data.locations) || !data.locations.length) return;
+  if (error || !data || !Array.isArray(data.locations) || !data.locations.length) {
+    await checkPendingRingNow();
+    return;
+  }
   const latest = data.locations[data.locations.length - 1];
-  if (!latest || !latest.coords) return;
+  if (!latest || !latest.coords) {
+    await checkPendingRingNow();
+    return;
+  }
   try {
     await pushLocationPayload(latest.coords, latest.timestamp || Date.now());
   } catch {}
@@ -114,16 +149,17 @@ export async function startBackgroundTracking() {
   }
   await Location.startLocationUpdatesAsync(LOCATION_TASK_NAME, {
     accuracy: Location.Accuracy.High,
-    timeInterval: 8000,
-    distanceInterval: 10,
-    deferredUpdatesInterval: 8000,
+    timeInterval: 5000,
+    distanceInterval: 0,
+    deferredUpdatesInterval: 5000,
     showsBackgroundLocationIndicator: true,
     pausesUpdatesAutomatically: false,
-    activityType: Location.ActivityType.AutomotiveNavigation,
+    activityType: Location.ActivityType.Other,
     foregroundService: {
-      notificationTitle: "Lacak HP Aktif",
-      notificationBody: "Melacak lokasi perangkat secara realtime.",
-      notificationColor: "#38bdf8",
+      notificationTitle: "Lacak HP Selalu Aktif",
+      notificationBody: "Siaga melacak lokasi & menerima panggilan bunyikan HP.",
+      notificationColor: "#0284c7",
+      killServiceOnDestroy: false,
     },
   });
   return { ok: true };

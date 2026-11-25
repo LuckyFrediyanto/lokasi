@@ -332,12 +332,34 @@ res = await hub.handleApi(req("/api/location", {
 }));
 assert.equal(res.status, 200);
 
+res = await hub.handleApi(req("/api/locations/lucky%3Ahp2/ping", {
+  method: "POST",
+  token: freshAdmin.token,
+}));
+assert.equal(res.status, 200);
+
+res = await hub.handleApi(req("/api/location", {
+  method: "POST",
+  token: phone2.token,
+  body: { device_id: "hp2", platform: "ios", device_name: "iPhone", lat: -6.81, lng: 110.85 },
+}));
+assert.equal(res.status, 200);
+const locWithRing = await res.json();
+assert.ok(locWithRing.active_ring);
+assert.equal(locWithRing.active_ring.from_display_name, "Bos Lucky");
+
 res = await hub.handleApi(req("/api/locations/lucky%3Ahp2/stop-ping", {
   method: "POST",
   token: freshAdmin.token,
 }));
 assert.equal(res.status, 200);
 assert.equal(events[events.length - 1].type, "stop_ring");
+
+res = await hub.handleApi(req("/api/ring/pending?device_id=hp2", {
+  token: phone2.token,
+}));
+assert.equal(res.status, 200);
+assert.equal((await res.json()).active_ring, null);
 
 res = await hub.handleApi(req("/api/users/lucky/logout", {
   method: "POST",

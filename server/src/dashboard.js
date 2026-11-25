@@ -53,10 +53,17 @@ export const DASHBOARD_HTML = `<!doctype html>
   .modal-bg { position:fixed; inset:0; background:rgba(15,23,42,.45); display:flex; align-items:center; justify-content:center; padding:16px; z-index:1000; }
   .modal { width:100%; max-width:440px; max-height:86vh; overflow:auto; background:var(--card); border:1px solid var(--line); border-radius:14px; padding:18px; box-shadow:0 16px 40px rgba(15,23,42,.2); }
   .user-row { display:flex; justify-content:space-between; align-items:center; gap:8px; padding:8px 0; border-bottom:1px solid var(--line); font-size:13px; }
-  .user-pin { width:34px; height:34px; border-radius:50%; border:3px solid #fff; display:flex; align-items:center; justify-content:center; box-shadow:0 3px 10px rgba(15,23,42,.35); position:relative; }
+  .user-pin { width:36px; height:36px; border-radius:50%; border:3px solid #fff; display:flex; align-items:center; justify-content:center; box-shadow:0 3px 10px rgba(15,23,42,.35); position:relative; box-sizing:border-box; }
   .user-pin svg { width:18px; height:18px; fill:#fff; }
+  .user-pin img { width:100%; height:100%; object-fit:cover; border-radius:50%; display:block; }
   .user-pin .st { width:10px; height:10px; border-radius:50%; border:2px solid #fff; position:absolute; right:-2px; bottom:-2px; background:#22c55e; }
   .user-pin .st.off { background:#94a3b8; }
+  .cluster-pill { display:inline-flex; align-items:center; gap:3px; padding:3px; background:#fff; border:2.5px solid #fff; border-radius:999px; box-shadow:0 4px 14px rgba(15,23,42,.36); box-sizing:border-box; }
+  .cluster-av { width:32px; height:32px; border-radius:50%; display:flex; align-items:center; justify-content:center; position:relative; flex-shrink:0; }
+  .cluster-av svg { width:17px; height:17px; fill:#fff; }
+  .cluster-av img { width:100%; height:100%; object-fit:cover; border-radius:50%; display:block; }
+  .cluster-av .st { width:9px; height:9px; border-radius:50%; border:1.5px solid #fff; position:absolute; right:-1px; bottom:-1px; background:#22c55e; }
+  .cluster-av .st.off { background:#94a3b8; }
   .color-dot { width:11px; height:11px; border-radius:50%; display:inline-block; margin-right:6px; vertical-align:middle; }
   .toast { position:fixed; top:66px; left:50%; transform:translateX(-50%); background:#0f172a; color:#fff; padding:10px 14px; border-radius:12px; z-index:900; font-size:13px; font-weight:600; box-shadow:0 6px 24px rgba(15,23,42,.25); }
   .notif-card { display:flex; gap:10px; align-items:center; cursor:pointer; }
@@ -264,37 +271,86 @@ function initMap() {
     maxZoom: 20,
     attribution: "&copy; Maps"
   }).addTo(map);
+  map.on("zoomend", renderMarkers);
+}
+
+let clusterMarkers = [];
+function renderMarkers() {
+  if (!map) return;
+  clusterMarkers.forEach((m) => map.removeLayer(m));
+  clusterMarkers = [];
+  const list = Array.from(devices.values()).filter((d) => d.platform === "ios" || d.platform === "android");
+  if (!list.length) return;
+  const svg = '<svg viewBox="0 0 24 24"><path d="M12 12c2.7 0 5-2.3 5-5s-2.3-5-5-5-5 2.3-5 5 2.3 5 5 5zm0 2c-3.3 0-10 1.7-10 5v3h20v-3c0-3.3-6.7-5-10-5z"/></svg>';
+  const zoom = map.getZoom();
+  const groups = [];
+  for (const d of list) {
+    const pt = map.project([d.lat, d.lng], zoom);
+    let grp = null;
+    for (const g of groups) {
+      if (Math.hypot(pt.x - g.cx, pt.y - g.cy) <= 42) { grp = g; break; }
+    }
+    if (grp) {
+      grp.items.push(d);
+      const n = grp.items.length;
+      grp.cx = (grp.cx * (n - 1) + pt.x) / n;
+      grp.cy = (grp.cy * (n - 1) + pt.y) / n;
+    } else {
+      groups.push({ cx: pt.x, cy: pt.y, items: [d] });
+    }
+  }
+  for (const g of groups) {
+    const avgLat = g.items.reduce((s, d) => s + d.lat, 0) / g.items.length;
+    const avgLng = g.items.reduce((s, d) => s + d.lng, 0) / g.items.length;
+    if (g.items.length === 1) {
+      const d = g.items[0];
+      const online = Date.now() - (d.last_seen || d.updated_at) < 90000;
+      const col = d.color || "#0284c7";
+      const tip = (d.display_name || d.username) + " (" + (d.platform === "ios" ? "iOS" : "Android") + ")";
+      const inner = d.photo ? '<img src="' + esc(d.photo) + '" alt="" />' : svg;
+      const icon = L.divIcon({
+        className: "",
+        html: '<div class="user-pin" style="background:' + esc(col) + '">' + inner + '<span class="st ' + (online ? "" : "off") + '"></span></div>',
+        iconSize: [36, 36],
+        iconAnchor: [18, 18]
+      });
+      clusterMarkers.push(L.marker([d.lat, d.lng], { icon }).bindTooltip(esc(tip)).addTo(map));
+    } else {
+      const itemsHtml = g.items.map((d) => {
+        const online = Date.now() - (d.last_seen || d.updated_at) < 90000;
+        const col = d.color || "#0284c7";
+        const inner = d.photo ? '<img src="' + esc(d.photo) + '" alt="" />' : svg;
+        return '<div class="cluster-av" style="background:' + esc(col) + '">' + inner + '<span class="st ' + (online ? "" : "off") + '"></span></div>';
+      }).join("");
+      const width = g.items.length * 32 + (g.items.length - 1) * 3 + 11;
+      const tip = g.items.map((d) => d.display_name || d.username).join(", ");
+      const icon = L.divIcon({
+        className: "",
+        html: '<div class="cluster-pill">' + itemsHtml + '</div>',
+        iconSize: [width, 43],
+        iconAnchor: [width / 2, 21]
+      });
+      const m = L.marker([avgLat, avgLng], { icon }).bindTooltip(esc(tip)).addTo(map);
+      m.on("click", () => {
+        const bounds = L.latLngBounds(g.items.map((d) => [d.lat, d.lng]));
+        if (bounds.getNorthEast().equals(bounds.getSouthWest())) map.setView([avgLat, avgLng], Math.min(20, map.getZoom() + 2));
+        else map.fitBounds(bounds, { padding: [60, 60], maxZoom: 19 });
+      });
+      clusterMarkers.push(m);
+    }
+  }
 }
 
 function upsertMarker(d) {
   if (d.platform !== "ios" && d.platform !== "android") return;
   devices.set(d.device_id, d);
-  const online = Date.now() - (d.last_seen || d.updated_at) < 90000;
-  const col = d.color || "#0284c7";
-  const tip = (d.display_name || d.username) + " (" + (d.platform === "ios" ? "iOS" : "Android") + ")";
-  const inner = d.photo
-    ? '<img src="' + esc(d.photo) + '" style="width:100%;height:100%;object-fit:cover;border-radius:50%" alt="" />'
-    : '<svg viewBox="0 0 24 24"><path d="M12 12c2.7 0 5-2.3 5-5s-2.3-5-5-5-5 2.3-5 5 2.3 5 5 5zm0 2c-3.3 0-10 1.7-10 5v3h20v-3c0-3.3-6.7-5-10-5z"/></svg>';
-  const icon = L.divIcon({
-    className: "",
-    html: '<div class="user-pin" title="' + esc(tip) + '" style="background:' + esc(col) + '">' + inner + '<span class="st ' + (online ? "" : "off") + '"></span></div>',
-    iconSize: [36, 36],
-    iconAnchor: [18, 18]
-  });
-  if (markers.has(d.device_id)) {
-    markers.get(d.device_id).setLatLng([d.lat, d.lng]).setIcon(icon);
-  } else {
-    markers.set(d.device_id, L.marker([d.lat, d.lng], { icon }).bindTooltip(esc(tip)).addTo(map));
-  }
+  renderMarkers();
   renderPanel();
 }
 
 function removeDevice(deviceId) {
   devices.delete(deviceId);
-  if (markers.has(deviceId)) {
-    map.removeLayer(markers.get(deviceId));
-    markers.delete(deviceId);
-  }
+  renderMarkers();
   renderPanel();
 }
 
