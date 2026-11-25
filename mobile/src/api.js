@@ -1,33 +1,14 @@
 import * as SecureStore from "expo-secure-store";
 import * as Device from "expo-device";
 import { Platform } from "react-native";
-import { DEFAULT_SERVER_URL, LEGACY_SERVER_URL, STORE_KEYS, normalizeServerUrl } from "./config";
-
-export async function getServerUrl() {
-  const saved = await SecureStore.getItemAsync(STORE_KEYS.SERVER_URL);
-  if (!saved || saved === LEGACY_SERVER_URL) {
-    if (saved === LEGACY_SERVER_URL) {
-      await SecureStore.setItemAsync(STORE_KEYS.SERVER_URL, DEFAULT_SERVER_URL);
-    }
-    return DEFAULT_SERVER_URL;
-  }
-  return saved;
-}
-
-export async function saveServerUrl(url) {
-  const clean = normalizeServerUrl(url);
-  if (!clean) throw new Error("URL server harus diawali http:// atau https://");
-  await SecureStore.setItemAsync(STORE_KEYS.SERVER_URL, clean);
-  return clean;
-}
+import { SERVER_URL, STORE_KEYS } from "./config";
 
 export async function getSession() {
-  const [token, username, serverUrl] = await Promise.all([
+  const [token, username] = await Promise.all([
     SecureStore.getItemAsync(STORE_KEYS.TOKEN),
     SecureStore.getItemAsync(STORE_KEYS.USERNAME),
-    getServerUrl(),
   ]);
-  return { token, username, serverUrl };
+  return { token, username, serverUrl: SERVER_URL };
 }
 
 export async function saveSession(token, username) {
@@ -59,13 +40,11 @@ export function getDeviceDisplayName() {
   return String(model).slice(0, 64);
 }
 
-export async function apiRequest(serverUrl, path, { method = "GET", token = null, body = null } = {}) {
-  const base = normalizeServerUrl(serverUrl);
-  if (!base) throw new Error("URL server tidak valid");
+export async function apiRequest(path, { method = "GET", token = null, body = null } = {}) {
   const headers = {};
   if (token) headers.Authorization = `Bearer ${token}`;
   if (body !== null) headers["Content-Type"] = "application/json";
-  const res = await fetch(`${base}${path}`, {
+  const res = await fetch(`${SERVER_URL}${path}`, {
     method,
     headers,
     body: body !== null ? JSON.stringify(body) : undefined,

@@ -34,7 +34,12 @@ export class LocationHubDO extends DurableObject {
       const [client, server] = Object.values(pair);
       this.ctx.acceptWebSocket(server, [user.username]);
       server.serializeAttachment({ username: user.username, role: user.role, token });
-      server.send(JSON.stringify({ type: "snapshot", devices: this.core.listLocations() }));
+      server.send(JSON.stringify({
+        type: "snapshot",
+        devices: this.core.listLocations(),
+        places: this.core.listPlaces(),
+        notifications: this.core.listNotifications(),
+      }));
       return new Response(null, { status: 101, webSocket: client });
     }
     return this.core.handleApi(request);
@@ -52,13 +57,18 @@ export class LocationHubDO extends DurableObject {
       ws.send(JSON.stringify({ type: "pong", time: Date.now() }));
       return;
     }
+    const att = ws.deserializeAttachment();
+    const user = att ? this.core.authenticateToken(att.token) : null;
+    if (!user) {
+      ws.close(4001, "Sesi tidak valid");
+      return;
+    }
+    if (msg.type === "heartbeat") {
+      this.core.touchHeartbeat(user, msg.device_id);
+      ws.send(JSON.stringify({ type: "pong", time: Date.now() }));
+      return;
+    }
     if (msg.type === "location") {
-      const att = ws.deserializeAttachment();
-      const user = att ? this.core.authenticateToken(att.token) : null;
-      if (!user) {
-        ws.close(4001, "Sesi tidak valid");
-        return;
-      }
       this.core.saveLocation(user, msg);
     }
   }

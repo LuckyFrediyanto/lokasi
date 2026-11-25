@@ -22,16 +22,16 @@ async function readBattery() {
 }
 
 export async function pushLocationPayload(coords, timestamp = Date.now()) {
-  const { token, serverUrl } = await getSession();
-  if (!token || !serverUrl) return null;
+  if (Platform.OS !== "ios" && Platform.OS !== "android") return null;
+  const { token } = await getSession();
+  if (!token) return null;
   const [deviceId, power] = await Promise.all([getOrCreateDeviceId(), readBattery()]);
-  const platform = Platform.OS === "ios" ? "ios" : Platform.OS === "android" ? "android" : "web";
-  return apiRequest(serverUrl, "/api/location", {
+  return apiRequest("/api/location", {
     method: "POST",
     token,
     body: {
       device_id: deviceId,
-      platform,
+      platform: Platform.OS,
       device_name: getDeviceDisplayName(),
       lat: coords.latitude,
       lng: coords.longitude,
@@ -55,7 +55,7 @@ TaskManager.defineTask(LOCATION_TASK_NAME, async ({ data, error }) => {
   } catch {}
 });
 
-export async function sendCurrentLocationNow() {
+export async function getCurrentCoords() {
   const fg = await Location.requestForegroundPermissionsAsync();
   if (fg.status !== "granted") {
     throw new Error("Izin lokasi ditolak");
@@ -63,7 +63,29 @@ export async function sendCurrentLocationNow() {
   const pos = await Location.getCurrentPositionAsync({
     accuracy: Location.Accuracy.High,
   });
+  return pos;
+}
+
+export async function sendCurrentLocationNow() {
+  const pos = await getCurrentCoords();
   return pushLocationPayload(pos.coords, pos.timestamp || Date.now());
+}
+
+export async function startForegroundWatch() {
+  const fg = await Location.requestForegroundPermissionsAsync();
+  if (fg.status !== "granted") return null;
+  return Location.watchPositionAsync(
+    {
+      accuracy: Location.Accuracy.BestForNavigation,
+      timeInterval: 5000,
+      distanceInterval: 5,
+    },
+    (pos) => {
+      if (pos && pos.coords) {
+        pushLocationPayload(pos.coords, pos.timestamp || Date.now()).catch(() => {});
+      }
+    }
+  );
 }
 
 export async function isBackgroundTrackingActive() {
@@ -87,22 +109,23 @@ export async function startBackgroundTracking() {
     };
   }
   const started = await isBackgroundTrackingActive();
-  if (!started) {
-    await Location.startLocationUpdatesAsync(LOCATION_TASK_NAME, {
-      accuracy: Location.Accuracy.Balanced,
-      timeInterval: 15000,
-      distanceInterval: 10,
-      deferredUpdatesInterval: 15000,
-      showsBackgroundLocationIndicator: true,
-      pausesUpdatesAutomatically: false,
-      activityType: Location.ActivityType.Other,
-      foregroundService: {
-        notificationTitle: "Lacak HP Aktif",
-        notificationBody: "Mengirim lokasi perangkat secara realtime di latar belakang.",
-        notificationColor: "#38bdf8",
-      },
-    });
+  if (started) {
+    try { await Location.stopLocationUpdatesAsync(LOCATION_TASK_NAME); } catch {}
   }
+  await Location.startLocationUpdatesAsync(LOCATION_TASK_NAME, {
+    accuracy: Location.Accuracy.High,
+    timeInterval: 8000,
+    distanceInterval: 10,
+    deferredUpdatesInterval: 8000,
+    showsBackgroundLocationIndicator: true,
+    pausesUpdatesAutomatically: false,
+    activityType: Location.ActivityType.AutomotiveNavigation,
+    foregroundService: {
+      notificationTitle: "Lacak HP Aktif",
+      notificationBody: "Melacak lokasi perangkat secara realtime.",
+      notificationColor: "#38bdf8",
+    },
+  });
   return { ok: true };
 }
 

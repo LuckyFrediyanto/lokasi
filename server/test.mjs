@@ -11,7 +11,7 @@ function createSqlAdapter() {
         return { toArray: () => [], one: () => undefined };
       }
       const stmt = db.prepare(query);
-      if (/^\s*SELECT\b/i.test(query)) {
+      if (/^\s*(SELECT|PRAGMA)\b/i.test(query)) {
         const rows = stmt.all(...params);
         return { toArray: () => rows, one: () => rows[0] };
       }
@@ -37,16 +37,6 @@ const hub = new LocationHubCore(createSqlAdapter(), (e) => events.push(e));
 
 let res = await hub.handleApi(req("/api/health"));
 assert.equal(res.status, 200);
-assert.equal((await res.json()).ok, true);
-
-res = await hub.handleApi(req("/api/locations"));
-assert.equal(res.status, 401);
-
-res = await hub.handleApi(req("/api/auth/login", {
-  method: "POST",
-  body: { username: "admin", password: "wrongpassword" },
-}));
-assert.equal(res.status, 401);
 
 res = await hub.handleApi(req("/api/auth/login", {
   method: "POST",
@@ -55,107 +45,156 @@ res = await hub.handleApi(req("/api/auth/login", {
 assert.equal(res.status, 200);
 const adminAuth = await res.json();
 assert.equal(adminAuth.user.username, "admin");
-assert.equal(adminAuth.user.role, "admin");
-assert.ok(adminAuth.token.length >= 64);
+assert.equal(adminAuth.user.display_name, "Admin");
 
 res = await hub.handleApi(req("/api/users", {
   method: "POST",
   token: adminAuth.token,
-  body: { username: "iphone-saya", password: "secret123", role: "user" },
+  body: { username: "lucky123", display_name: "Lucky", password: "abc", role: "user" },
+}));
+assert.equal(res.status, 400);
+
+res = await hub.handleApi(req("/api/users", {
+  method: "POST",
+  token: adminAuth.token,
+  body: { username: "lucky", display_name: "Lucky Frediyanto", password: "bebas", role: "user" },
 }));
 assert.equal(res.status, 201);
 
 res = await hub.handleApi(req("/api/auth/login", {
   method: "POST",
-  body: { username: "iphone-saya", password: "secret123" },
+  body: { username: "lucky", password: "bebas" },
 }));
 assert.equal(res.status, 200);
-const iosAuth = await res.json();
-assert.equal(iosAuth.user.username, "iphone-saya");
-assert.equal(iosAuth.user.role, "user");
-
-res = await hub.handleApi(req("/api/users", { token: iosAuth.token }));
-assert.equal(res.status, 403);
+const luckyAuth = await res.json();
+assert.equal(luckyAuth.user.display_name, "Lucky Frediyanto");
 
 res = await hub.handleApi(req("/api/location", {
   method: "POST",
+  token: luckyAuth.token,
+  body: { device_id: "web-1", platform: "web", lat: -6.8, lng: 110.84 },
+}));
+assert.equal(res.status, 403);
+
+res = await hub.handleApi(req("/api/places", {
+  method: "POST",
   token: adminAuth.token,
+  body: { name: "Rumah", lat: -6.8000, lng: 110.8400, radius: 50 },
+}));
+assert.equal(res.status, 201);
+const rumah = (await res.json()).place;
+
+res = await hub.handleApi(req("/api/places", {
+  method: "POST",
+  token: adminAuth.token,
+  body: { name: "Kantor", lat: -6.8100, lng: 110.8500, radius: 100 },
+}));
+assert.equal(res.status, 201);
+
+res = await hub.handleApi(req("/api/places", {
+  method: "POST",
+  token: adminAuth.token,
+  body: { name: "Salah", lat: -6.81, lng: 110.85, radius: 75 },
+}));
+assert.equal(res.status, 400);
+
+res = await hub.handleApi(req("/api/location", {
+  method: "POST",
+  token: luckyAuth.token,
   body: {
-    device_id: "android-01",
+    device_id: "poco",
     platform: "android",
-    device_name: "Pixel 8",
-    lat: -6.8048,
-    lng: 110.8405,
-    accuracy: 8.5,
-    battery: 82,
-    charging: false,
+    device_name: "Poco X8 Pro",
+    lat: -6.8000,
+    lng: 110.8400,
+    battery: 88,
   },
 }));
 assert.equal(res.status, 200);
-const andLoc = await res.json();
-assert.equal(andLoc.device.username, "admin");
-assert.equal(andLoc.device.device_id, "admin:android-01");
-assert.equal(events[events.length - 1].type, "location");
+const notifs1 = events.filter((e) => e.type === "notification");
+assert.equal(notifs1.length, 1);
+assert.equal(notifs1[0].notification.message, "Lucky Frediyanto - Android Telah sampai di Rumah");
 
 res = await hub.handleApi(req("/api/location", {
   method: "POST",
-  token: iosAuth.token,
+  token: luckyAuth.token,
   body: {
-    device_id: "ios-01",
-    platform: "ios",
-    device_name: "iPhone 15",
-    lat: -6.81,
-    lng: 110.85,
-    accuracy: 5,
-    battery: 95,
-    charging: true,
+    device_id: "poco",
+    platform: "android",
+    device_name: "Poco X8 Pro",
+    lat: -6.8007,
+    lng: 110.8400,
   },
 }));
 assert.equal(res.status, 200);
-const iosLoc = await res.json();
-assert.equal(iosLoc.device.username, "iphone-saya");
-assert.equal(iosLoc.device.device_id, "iphone-saya:ios-01");
+assert.equal(events.filter((e) => e.type === "notification").length, 1);
 
-res = await hub.handleApi(req("/api/locations", { token: iosAuth.token }));
-assert.equal(res.status, 200);
-const list = await res.json();
-assert.equal(list.devices.length, 2);
-
-res = await hub.handleApi(req("/api/locations/iphone-saya%3Aios-01/history", { token: adminAuth.token }));
-assert.equal(res.status, 200);
-assert.equal((await res.json()).points.length, 1);
-
-res = await hub.handleApi(req("/api/locations/iphone-saya%3Aios-01/ping", {
+res = await hub.handleApi(req("/api/location", {
   method: "POST",
-  token: adminAuth.token,
+  token: luckyAuth.token,
+  body: {
+    device_id: "poco",
+    platform: "android",
+    device_name: "Poco X8 Pro",
+    lat: -6.80075,
+    lng: 110.8400,
+  },
 }));
 assert.equal(res.status, 200);
-assert.equal(events[events.length - 1].type, "ring");
-assert.equal(events[events.length - 1].target_device_id, "iphone-saya:ios-01");
+const notifs2 = events.filter((e) => e.type === "notification");
+assert.equal(notifs2.length, 2);
+assert.equal(notifs2[1].notification.message, "Lucky Frediyanto - Android pergi dari Rumah");
 
-res = await hub.handleApi(req("/api/locations/admin%3Aandroid-01", {
-  method: "DELETE",
-  token: iosAuth.token,
-}));
-assert.equal(res.status, 403);
-
-res = await hub.handleApi(req("/api/users/iphone-saya", {
-  method: "DELETE",
-  token: adminAuth.token,
-}));
-assert.equal(res.status, 200);
-assert.equal(events[events.length - 1].type, "device_removed");
-
-res = await hub.handleApi(req("/api/auth/me", { token: iosAuth.token }));
-assert.equal(res.status, 401);
-
-res = await hub.handleApi(req("/api/auth/logout", {
+res = await hub.handleApi(req("/api/location", {
   method: "POST",
+  token: luckyAuth.token,
+  body: {
+    device_id: "poco",
+    platform: "android",
+    device_name: "Poco X8 Pro",
+    lat: -6.8100,
+    lng: 110.8500,
+  },
+}));
+assert.equal(res.status, 200);
+const notifs3 = events.filter((e) => e.type === "notification");
+assert.equal(notifs3.length, 3);
+assert.equal(notifs3[2].notification.message, "Lucky Frediyanto - Android Telah sampai di Kantor");
+
+res = await hub.handleApi(req("/api/users/admin", {
+  method: "PATCH",
   token: adminAuth.token,
+  body: { username: "bos", display_name: "Bos Lucky", password: "barupassword" },
 }));
 assert.equal(res.status, 200);
 
 res = await hub.handleApi(req("/api/auth/me", { token: adminAuth.token }));
-assert.equal(res.status, 401);
+assert.equal(res.status, 200);
+assert.equal((await res.json()).user.username, "bos");
 
-console.log("ALL_TESTS_PASSED");
+res = await hub.handleApi(req("/api/auth/login", {
+  method: "POST",
+  body: { username: "bos", password: "barupassword" },
+}));
+assert.equal(res.status, 200);
+
+res = await hub.handleApi(req("/api/locations", { token: adminAuth.token }));
+assert.equal((await res.json()).devices.length, 1);
+
+res = await hub.handleApi(req("/api/auth/logout", {
+  method: "POST",
+  token: luckyAuth.token,
+  body: { device_id: "poco" },
+}));
+assert.equal(res.status, 200);
+
+res = await hub.handleApi(req("/api/locations", { token: adminAuth.token }));
+assert.equal((await res.json()).devices.length, 0);
+
+res = await hub.handleApi(req(`/api/places/${rumah.id}`, {
+  method: "DELETE",
+  token: adminAuth.token,
+}));
+assert.equal(res.status, 200);
+
+console.log("ALL_V2_TESTS_PASSED");

@@ -1,10 +1,13 @@
 const SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 const HISTORY_LIMIT = 200;
 const HISTORY_MAX_AGE_MS = 24 * 60 * 60 * 1000;
+const NOTIF_LIMIT = 50;
+const ONLINE_WINDOW_MS = 90 * 1000;
 const PBKDF2_ITERATIONS = 100000;
-const USERNAME_RE = /^[a-z0-9._-]{2,32}$/;
+const USERNAME_RE = /^[a-z]{2,32}$/;
 const DEVICE_ID_RE = /^[a-zA-Z0-9._:-]{2,80}$/;
-const ALLOWED_PLATFORMS = new Set(["ios", "android", "web"]);
+const MOBILE_PLATFORMS = new Set(["ios", "android"]);
+const ALLOWED_RADII = new Set([20, 50, 100, 200]);
 
 const encoder = new TextEncoder();
 
@@ -77,8 +80,15 @@ function normalizeUsername(raw) {
   return USERNAME_RE.test(value) ? value : null;
 }
 
+function normalizeDisplayName(raw, fallback) {
+  if (typeof raw === "string" && raw.trim()) {
+    return raw.trim().slice(0, 64);
+  }
+  return fallback;
+}
+
 function validPassword(raw) {
-  return typeof raw === "string" && raw.length >= 6 && raw.length <= 128;
+  return typeof raw === "string" && raw.length >= 1 && raw.length <= 128;
 }
 
 function finiteNumber(v, min, max) {
@@ -90,6 +100,23 @@ function finiteNumber(v, min, max) {
 function optionalFinite(v, min, max) {
   if (v === null || v === undefined) return null;
   return finiteNumber(v, min, max);
+}
+
+function platformLabel(platform) {
+  if (platform === "ios") return "iOS";
+  if (platform === "android") return "Android";
+  return "Web";
+}
+
+export function haversineMeters(lat1, lng1, lat2, lng2) {
+  const toRad = (deg) => (deg * Math.PI) / 180;
+  const R = 6371000;
+  const dLat = toRad(lat2 - lat1);
+  const dLng = toRad(lng2 - lng1);
+  const a =
+    Math.sin(dLat / 2) ** 2 +
+    Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLng / 2) ** 2;
+  return 2 * R * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
 }
 
 export const CORS_HEADERS = {
@@ -121,6 +148,7 @@ export class LocationHubCore {
     this.sql.exec(`
       CREATE TABLE IF NOT EXISTS users (
         username TEXT PRIMARY KEY,
+        display_name TEXT NOT NULL DEFAULT '',
         password_hash TEXT NOT NULL,
         role TEXT NOT NULL CHECK(role IN ('admin', 'user')),
         created_at INTEGER NOT NULL
@@ -145,7 +173,9 @@ export class LocationHubCore {
         heading REAL,
         battery REAL,
         charging INTEGER,
-        updated_at INTEGER NOT NULL
+        updated_at INTEGER NOT NULL,
+        last_seen INTEGER,
+        session_token TEXT
       );
       CREATE INDEX IF NOT EXISTS idx_locations_user ON locations(username);
       CREATE TABLE IF NOT EXISTS location_history (
@@ -159,7 +189,57 @@ export class LocationHubCore {
         recorded_at INTEGER NOT NULL
       );
       CREATE INDEX IF NOT EXISTS idx_history_device_time ON location_history(device_id, recorded_at DESC);
+      CREATE TABLE IF NOT EXISTS places (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        name TEXT NOT NULL,
+        lat REAL NOT NULL,
+        lng REAL NOT NULL,
+        radius INTEGER NOT NULL CHECK(radius IN (20, 50, 100, 200)),
+        created_by TEXT NOT NULL,
+        created_at INTEGER NOT NULL
+      );
+      CREATE TABLE IF NOT EXISTS device_place_state (
+        device_id TEXT PRIMARY KEY,
+        place_id INTEGER,
+        place_name TEXT,
+        outside_streak INTEGER NOT NULL DEFAULT 0,
+        updated_at INTEGER NOT NULL
+      );
+      CREATE TABLE IF NOT EXISTS notifications (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        event_type TEXT NOT NULL CHECK(event_type IN ('arrived', 'departed')),
+        device_id TEXT NOT NULL,
+        username TEXT NOT NULL,
+        display_name TEXT NOT NULL,
+        platform TEXT NOT NULL,
+        place_id INTEGER,
+        place_name TEXT NOT NULL,
+        message TEXT NOT NULL,
+        created_at INTEGER NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS idx_notifications_time ON notifications(created_at DESC);
     `);
+
+    const userCols = new Set(
+      this.sql.exec("PRAGMA table_info(users)").toArray().map((c) => c.name)
+    );
+    if (!userCols.has("display_name")) {
+      this.sql.exec("ALTER TABLE users ADD COLUMN display_name TEXT NOT NULL DEFAULT ''");
+    }
+    this.sql.exec(
+      "UPDATE users SET display_name = CASE WHEN username = 'admin' THEN 'Admin' ELSE username END WHERE display_name = '' OR display_name IS NULL"
+    );
+
+    const locCols = new Set(
+      this.sql.exec("PRAGMA table_info(locations)").toArray().map((c) => c.name)
+    );
+    if (!locCols.has("last_seen")) {
+      this.sql.exec("ALTER TABLE locations ADD COLUMN last_seen INTEGER");
+    }
+    if (!locCols.has("session_token")) {
+      this.sql.exec("ALTER TABLE locations ADD COLUMN session_token TEXT");
+    }
+    this.sql.exec("DELETE FROM locations WHERE platform = 'web'");
   }
 
   async ensureSeedAdmin() {
@@ -167,8 +247,9 @@ export class LocationHubCore {
     if (row && Number(row.n) > 0) return;
     const hash = await hashPassword("123456");
     this.sql.exec(
-      "INSERT OR IGNORE INTO users (username, password_hash, role, created_at) VALUES (?, ?, 'admin', ?)",
+      "INSERT OR IGNORE INTO users (username, display_name, password_hash, role, created_at) VALUES (?, ?, ?, 'admin', ?)",
       "admin",
+      "Admin",
       hash,
       Date.now()
     );
@@ -199,7 +280,7 @@ export class LocationHubCore {
     if (typeof token !== "string" || token.length < 32) return null;
     const now = Date.now();
     const rows = this.sql.exec(
-      `SELECT s.token, s.username, s.expires_at, u.role
+      `SELECT s.token, s.username, s.expires_at, u.display_name, u.role
        FROM sessions s
        JOIN users u ON u.username = s.username
        WHERE s.token = ?`,
@@ -209,9 +290,15 @@ export class LocationHubCore {
     const row = rows[0];
     if (Number(row.expires_at) <= now) {
       this.sql.exec("DELETE FROM sessions WHERE token = ?", token);
+      this.removeDevicesBySession(token);
       return null;
     }
-    return { token: row.token, username: row.username, role: row.role };
+    return {
+      token: row.token,
+      username: row.username,
+      display_name: row.display_name || row.username,
+      role: row.role,
+    };
   }
 
   extractToken(request) {
@@ -222,13 +309,247 @@ export class LocationHubCore {
     return null;
   }
 
-  listLocations() {
-    return this.sql.exec(
-      `SELECT device_id, username, platform, device_name, lat, lng,
-              accuracy, altitude, speed, heading, battery, charging, updated_at
-       FROM locations
-       ORDER BY updated_at DESC`
+  purgeExpiredSessionsAndDevices() {
+    const now = Date.now();
+    const expiredTokens = this.sql.exec(
+      "SELECT token FROM sessions WHERE expires_at <= ?",
+      now
+    ).toArray().map((r) => r.token);
+    if (expiredTokens.length) {
+      this.sql.exec("DELETE FROM sessions WHERE expires_at <= ?", now);
+      for (const tok of expiredTokens) {
+        this.removeDevicesBySession(tok);
+      }
+    }
+  }
+
+  removeDevicesBySession(token) {
+    const rows = this.sql.exec(
+      "SELECT device_id FROM locations WHERE session_token = ?",
+      token
     ).toArray();
+    for (const r of rows) {
+      this.sql.exec("DELETE FROM locations WHERE device_id = ?", r.device_id);
+      this.sql.exec("DELETE FROM device_place_state WHERE device_id = ?", r.device_id);
+      this.broadcast({ type: "device_removed", device_id: r.device_id });
+    }
+  }
+
+  listLocations() {
+    this.purgeExpiredSessionsAndDevices();
+    const now = Date.now();
+    const rows = this.sql.exec(
+      `SELECT l.device_id, l.username, u.display_name, l.platform, l.device_name,
+              l.lat, l.lng, l.accuracy, l.altitude, l.speed, l.heading,
+              l.battery, l.charging, l.updated_at, l.last_seen,
+              dps.place_name AS current_place
+       FROM locations l
+       JOIN users u ON u.username = l.username
+       LEFT JOIN device_place_state dps ON dps.device_id = l.device_id
+       WHERE l.platform IN ('ios', 'android')
+         AND EXISTS (
+           SELECT 1 FROM sessions s
+           WHERE s.username = l.username
+             AND s.expires_at > ?
+             AND (l.session_token IS NULL OR s.token = l.session_token)
+         )
+       ORDER BY l.updated_at DESC`,
+      now
+    ).toArray();
+    return rows.map((r) => {
+      const seen = Number(r.last_seen || r.updated_at || 0);
+      return {
+        ...r,
+        display_name: r.display_name || r.username,
+        last_seen: seen,
+        online: now - seen < ONLINE_WINDOW_MS,
+      };
+    });
+  }
+
+  listPlaces() {
+    return this.sql.exec(
+      "SELECT id, name, lat, lng, radius, created_by, created_at FROM places ORDER BY created_at DESC"
+    ).toArray();
+  }
+
+  listNotifications() {
+    return this.sql.exec(
+      `SELECT id, event_type, device_id, username, display_name, platform, place_id, place_name, message, created_at
+       FROM notifications
+       ORDER BY created_at DESC
+       LIMIT ?`,
+      NOTIF_LIMIT
+    ).toArray();
+  }
+
+  emitGeofenceNotification(eventType, device, place) {
+    const pLabel = platformLabel(device.platform);
+    const message =
+      eventType === "arrived"
+        ? `${device.display_name} - ${pLabel} Telah sampai di ${place.name}`
+        : `${device.display_name} - ${pLabel} pergi dari ${place.name}`;
+    const now = Date.now();
+    this.sql.exec(
+      `INSERT INTO notifications (
+        event_type, device_id, username, display_name, platform, place_id, place_name, message, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      eventType,
+      device.device_id,
+      device.username,
+      device.display_name,
+      device.platform,
+      place.id,
+      place.name,
+      message,
+      now
+    );
+    const created = this.sql.exec(
+      `SELECT id, event_type, device_id, username, display_name, platform, place_id, place_name, message, created_at
+       FROM notifications
+       ORDER BY id DESC LIMIT 1`
+    ).toArray()[0];
+    this.sql.exec(
+      `DELETE FROM notifications WHERE id NOT IN (
+        SELECT id FROM notifications ORDER BY id DESC LIMIT ?
+      )`,
+      NOTIF_LIMIT
+    );
+    if (created) {
+      this.broadcast({ type: "notification", notification: created });
+    }
+    return created;
+  }
+
+  evaluateGeofences(device) {
+    const places = this.listPlaces();
+    const stateRows = this.sql.exec(
+      "SELECT device_id, place_id, place_name, outside_streak FROM device_place_state WHERE device_id = ?",
+      device.device_id
+    ).toArray();
+    const state = stateRows[0] || null;
+    const now = Date.now();
+
+    let nearestInside = null;
+    let nearestDist = Infinity;
+    for (const p of places) {
+      const dist = haversineMeters(device.lat, device.lng, p.lat, p.lng);
+      if (dist <= p.radius && dist < nearestDist) {
+        nearestInside = p;
+        nearestDist = dist;
+      }
+    }
+
+    if (!state || state.place_id == null) {
+      if (nearestInside) {
+        this.sql.exec(
+          `INSERT INTO device_place_state (device_id, place_id, place_name, outside_streak, updated_at)
+           VALUES (?, ?, ?, 0, ?)
+           ON CONFLICT(device_id) DO UPDATE SET
+             place_id = excluded.place_id,
+             place_name = excluded.place_name,
+             outside_streak = 0,
+             updated_at = excluded.updated_at`,
+          device.device_id,
+          nearestInside.id,
+          nearestInside.name,
+          now
+        );
+        this.emitGeofenceNotification("arrived", device, nearestInside);
+        return nearestInside.name;
+      }
+      return null;
+    }
+
+    const currentPlace = places.find((p) => Number(p.id) === Number(state.place_id));
+    if (!currentPlace) {
+      this.sql.exec("DELETE FROM device_place_state WHERE device_id = ?", device.device_id);
+      if (nearestInside) {
+        this.sql.exec(
+          `INSERT INTO device_place_state (device_id, place_id, place_name, outside_streak, updated_at)
+           VALUES (?, ?, ?, 0, ?)`,
+          device.device_id,
+          nearestInside.id,
+          nearestInside.name,
+          now
+        );
+        this.emitGeofenceNotification("arrived", device, nearestInside);
+        return nearestInside.name;
+      }
+      return null;
+    }
+
+    if (nearestInside && Number(nearestInside.id) !== Number(currentPlace.id)) {
+      this.emitGeofenceNotification("departed", device, currentPlace);
+      this.sql.exec(
+        `UPDATE device_place_state SET place_id = ?, place_name = ?, outside_streak = 0, updated_at = ?
+         WHERE device_id = ?`,
+        nearestInside.id,
+        nearestInside.name,
+        now,
+        device.device_id
+      );
+      this.emitGeofenceNotification("arrived", device, nearestInside);
+      return nearestInside.name;
+    }
+
+    const distToCurrent = haversineMeters(device.lat, device.lng, currentPlace.lat, currentPlace.lng);
+    const exitBuffer = currentPlace.radius + 15;
+    const fastExitThreshold = currentPlace.radius + 50;
+
+    if (distToCurrent <= exitBuffer) {
+      if (Number(state.outside_streak) !== 0) {
+        this.sql.exec(
+          "UPDATE device_place_state SET outside_streak = 0, updated_at = ? WHERE device_id = ?",
+          now,
+          device.device_id
+        );
+      }
+      return currentPlace.name;
+    }
+
+    const nextStreak = Number(state.outside_streak || 0) + 1;
+    if (nextStreak >= 2 || distToCurrent >= fastExitThreshold) {
+      this.sql.exec(
+        "UPDATE device_place_state SET place_id = NULL, place_name = NULL, outside_streak = 0, updated_at = ? WHERE device_id = ?",
+        now,
+        device.device_id
+      );
+      this.emitGeofenceNotification("departed", device, currentPlace);
+      return null;
+    }
+
+    this.sql.exec(
+      "UPDATE device_place_state SET outside_streak = ?, updated_at = ? WHERE device_id = ?",
+      nextStreak,
+      now,
+      device.device_id
+    );
+    return currentPlace.name;
+  }
+
+  touchHeartbeat(user, rawDeviceId) {
+    const now = Date.now();
+    if (typeof rawDeviceId === "string" && DEVICE_ID_RE.test(rawDeviceId.trim())) {
+      const cleaned = rawDeviceId.trim();
+      const deviceId = cleaned.startsWith(`${user.username}:`)
+        ? cleaned
+        : `${user.username}:${cleaned}`.slice(0, 80);
+      this.sql.exec(
+        "UPDATE locations SET last_seen = ?, session_token = ? WHERE device_id = ? AND username = ?",
+        now,
+        user.token,
+        deviceId,
+        user.username
+      );
+    } else {
+      this.sql.exec(
+        "UPDATE locations SET last_seen = ? WHERE session_token = ? AND username = ?",
+        now,
+        user.token,
+        user.username
+      );
+    }
   }
 
   saveLocation(user, body) {
@@ -237,8 +558,11 @@ export class LocationHubCore {
     if (lat === null || lng === null) {
       return { error: "Koordinat lat/lng tidak valid", status: 400 };
     }
-    const platformRaw = typeof body.platform === "string" ? body.platform.toLowerCase().trim() : "web";
-    const platform = ALLOWED_PLATFORMS.has(platformRaw) ? platformRaw : "web";
+    const platformRaw = typeof body.platform === "string" ? body.platform.toLowerCase().trim() : "";
+    if (!MOBILE_PLATFORMS.has(platformRaw)) {
+      return { error: "Hanya aplikasi Android dan iOS yang dapat mengirim lokasi aktif", status: 403 };
+    }
+    const platform = platformRaw;
     const rawDeviceId = typeof body.device_id === "string" && DEVICE_ID_RE.test(body.device_id.trim())
       ? body.device_id.trim()
       : `${user.username}:${platform}`;
@@ -247,7 +571,7 @@ export class LocationHubCore {
       : `${user.username}:${rawDeviceId}`.slice(0, 80);
     const deviceName = typeof body.device_name === "string" && body.device_name.trim()
       ? body.device_name.trim().slice(0, 64)
-      : `${user.username} (${platform.toUpperCase()})`;
+      : `${user.display_name} (${platformLabel(platform)})`;
 
     const accuracy = optionalFinite(body.accuracy, 0, 100000);
     const altitude = optionalFinite(body.altitude, -1000, 100000);
@@ -261,8 +585,8 @@ export class LocationHubCore {
     this.sql.exec(
       `INSERT INTO locations (
         device_id, username, platform, device_name, lat, lng,
-        accuracy, altitude, speed, heading, battery, charging, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        accuracy, altitude, speed, heading, battery, charging, updated_at, last_seen, session_token
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(device_id) DO UPDATE SET
         username = excluded.username,
         platform = excluded.platform,
@@ -275,9 +599,11 @@ export class LocationHubCore {
         heading = excluded.heading,
         battery = excluded.battery,
         charging = excluded.charging,
-        updated_at = excluded.updated_at`,
+        updated_at = excluded.updated_at,
+        last_seen = excluded.last_seen,
+        session_token = excluded.session_token`,
       deviceId, user.username, platform, deviceName, lat, lng,
-      accuracy, altitude, speed, heading, battery, charging, updatedAt
+      accuracy, altitude, speed, heading, battery, charging, updatedAt, now, user.token
     );
 
     this.sql.exec(
@@ -298,6 +624,7 @@ export class LocationHubCore {
     const device = {
       device_id: deviceId,
       username: user.username,
+      display_name: user.display_name,
       platform,
       device_name: deviceName,
       lat,
@@ -309,8 +636,12 @@ export class LocationHubCore {
       battery,
       charging,
       updated_at: updatedAt,
+      last_seen: now,
+      online: true,
+      current_place: null,
     };
 
+    device.current_place = this.evaluateGeofences(device);
     this.broadcast({ type: "location", device });
     return { device, status: 200 };
   }
@@ -341,35 +672,39 @@ export class LocationHubCore {
     if (path === "/api/auth/login" && request.method === "POST") {
       const body = await this.readJson(request);
       if (!body) return json({ error: "Payload JSON tidak valid" }, 400);
-      const username = normalizeUsername(body.username);
+      const rawUser = typeof body.username === "string" ? body.username.trim().toLowerCase() : "";
       const password = body.password;
-      if (!username || typeof password !== "string") {
+      if (!rawUser || typeof password !== "string") {
         return json({ error: "Username dan password wajib diisi" }, 400);
       }
-      if (!this.checkRateLimit(username)) {
+      if (!this.checkRateLimit(rawUser)) {
         return json({ error: "Terlalu banyak percobaan login, coba lagi 15 menit" }, 429);
       }
       const rows = this.sql.exec(
-        "SELECT username, password_hash, role FROM users WHERE username = ?",
-        username
+        "SELECT username, display_name, password_hash, role FROM users WHERE username = ?",
+        rawUser
       ).toArray();
       if (!rows.length || !(await verifyPassword(password, rows[0].password_hash))) {
-        this.recordFailedLogin(username);
+        this.recordFailedLogin(rawUser);
         return json({ error: "Username atau password salah" }, 401);
       }
-      this.clearFailedLogin(username);
+      this.clearFailedLogin(rawUser);
       const now = Date.now();
       const token = randomToken();
       const expiresAt = now + SESSION_TTL_MS;
-      this.sql.exec("DELETE FROM sessions WHERE expires_at <= ?", now);
+      this.purgeExpiredSessionsAndDevices();
       this.sql.exec(
         "INSERT INTO sessions (token, username, created_at, expires_at) VALUES (?, ?, ?, ?)",
-        token, username, now, expiresAt
+        token, rows[0].username, now, expiresAt
       );
       return json({
         token,
         expires_at: expiresAt,
-        user: { username: rows[0].username, role: rows[0].role },
+        user: {
+          username: rows[0].username,
+          display_name: rows[0].display_name || rows[0].username,
+          role: rows[0].role,
+        },
       });
     }
 
@@ -378,12 +713,60 @@ export class LocationHubCore {
     if (!user) return json({ error: "Sesi tidak valid atau kedaluwarsa" }, 401);
 
     if (path === "/api/auth/me" && request.method === "GET") {
-      return json({ user: { username: user.username, role: user.role } });
+      return json({
+        user: { username: user.username, display_name: user.display_name, role: user.role },
+      });
     }
 
     if (path === "/api/auth/logout" && request.method === "POST") {
+      const body = (await this.readJson(request)) || {};
+      const removedIds = new Set();
+      const bySession = this.sql.exec(
+        "SELECT device_id FROM locations WHERE session_token = ?",
+        user.token
+      ).toArray();
+      for (const r of bySession) removedIds.add(r.device_id);
+
+      if (typeof body.device_id === "string" && DEVICE_ID_RE.test(body.device_id.trim())) {
+        const cleaned = body.device_id.trim();
+        const fullId = cleaned.startsWith(`${user.username}:`)
+          ? cleaned
+          : `${user.username}:${cleaned}`.slice(0, 80);
+        const byDev = this.sql.exec(
+          "SELECT device_id FROM locations WHERE device_id = ? AND username = ?",
+          fullId,
+          user.username
+        ).toArray();
+        for (const r of byDev) removedIds.add(r.device_id);
+      }
+
       this.sql.exec("DELETE FROM sessions WHERE token = ?", user.token);
+
+      const remaining = this.sql.exec(
+        "SELECT COUNT(*) AS n FROM sessions WHERE username = ? AND expires_at > ?",
+        user.username,
+        Date.now()
+      ).toArray()[0];
+      if (!remaining || Number(remaining.n) === 0) {
+        const allUserDevs = this.sql.exec(
+          "SELECT device_id FROM locations WHERE username = ?",
+          user.username
+        ).toArray();
+        for (const r of allUserDevs) removedIds.add(r.device_id);
+      }
+
+      for (const devId of removedIds) {
+        this.sql.exec("DELETE FROM locations WHERE device_id = ?", devId);
+        this.sql.exec("DELETE FROM device_place_state WHERE device_id = ?", devId);
+        this.broadcast({ type: "device_removed", device_id: devId });
+      }
       return json({ ok: true });
+    }
+
+    if (path === "/api/heartbeat" && request.method === "POST") {
+      const body = (await this.readJson(request)) || {};
+      this.touchHeartbeat(user, body.device_id);
+      return json({ ok: true, time: Date.now() });
     }
 
     if (path === "/api/location" && request.method === "POST") {
@@ -424,6 +807,7 @@ export class LocationHubCore {
         target_device_id: deviceId,
         target_username: exists[0].username,
         from_username: user.username,
+        from_display_name: user.display_name,
         at: Date.now(),
       });
       return json({ ok: true });
@@ -442,14 +826,91 @@ export class LocationHubCore {
       }
       this.sql.exec("DELETE FROM locations WHERE device_id = ?", deviceId);
       this.sql.exec("DELETE FROM location_history WHERE device_id = ?", deviceId);
+      this.sql.exec("DELETE FROM device_place_state WHERE device_id = ?", deviceId);
       this.broadcast({ type: "device_removed", device_id: deviceId });
       return json({ ok: true });
+    }
+
+    if (path === "/api/places" && request.method === "GET") {
+      return json({ places: this.listPlaces() });
+    }
+
+    if (path === "/api/places" && request.method === "POST") {
+      const body = await this.readJson(request);
+      if (!body) return json({ error: "Payload JSON tidak valid" }, 400);
+      const name = typeof body.name === "string" ? body.name.trim().slice(0, 64) : "";
+      if (!name) return json({ error: "Nama lokasi wajib diisi" }, 400);
+      const lat = finiteNumber(body.lat, -90, 90);
+      const lng = finiteNumber(body.lng, -180, 180);
+      if (lat === null || lng === null) return json({ error: "Koordinat lokasi tidak valid" }, 400);
+      const radius = Number(body.radius ?? 50);
+      if (!ALLOWED_RADII.has(radius)) {
+        return json({ error: "Radius harus salah satu dari 20, 50, 100, atau 200 meter" }, 400);
+      }
+      const now = Date.now();
+      this.sql.exec(
+        "INSERT INTO places (name, lat, lng, radius, created_by, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+        name, lat, lng, radius, user.username, now
+      );
+      const place = this.sql.exec(
+        "SELECT id, name, lat, lng, radius, created_by, created_at FROM places ORDER BY id DESC LIMIT 1"
+      ).toArray()[0];
+      const places = this.listPlaces();
+      this.broadcast({ type: "places", places });
+      return json({ ok: true, place, places }, 201);
+    }
+
+    const placeMatch = path.match(/^\/api\/places\/(\d+)$/);
+    if (placeMatch && request.method === "PATCH") {
+      const id = Number(placeMatch[1]);
+      const existing = this.sql.exec(
+        "SELECT id, name, lat, lng, radius FROM places WHERE id = ?",
+        id
+      ).toArray()[0];
+      if (!existing) return json({ error: "Lokasi tidak ditemukan" }, 404);
+      const body = await this.readJson(request);
+      if (!body) return json({ error: "Payload JSON tidak valid" }, 400);
+      const name = body.name !== undefined ? String(body.name).trim().slice(0, 64) : existing.name;
+      if (!name) return json({ error: "Nama lokasi wajib diisi" }, 400);
+      const lat = body.lat !== undefined ? finiteNumber(body.lat, -90, 90) : existing.lat;
+      const lng = body.lng !== undefined ? finiteNumber(body.lng, -180, 180) : existing.lng;
+      if (lat === null || lng === null) return json({ error: "Koordinat lokasi tidak valid" }, 400);
+      const radius = body.radius !== undefined ? Number(body.radius) : existing.radius;
+      if (!ALLOWED_RADII.has(radius)) {
+        return json({ error: "Radius harus 20, 50, 100, atau 200 meter" }, 400);
+      }
+      this.sql.exec(
+        "UPDATE places SET name = ?, lat = ?, lng = ?, radius = ? WHERE id = ?",
+        name, lat, lng, radius, id
+      );
+      this.sql.exec(
+        "UPDATE device_place_state SET place_name = ? WHERE place_id = ?",
+        name, id
+      );
+      const places = this.listPlaces();
+      this.broadcast({ type: "places", places });
+      return json({ ok: true, places });
+    }
+
+    if (placeMatch && request.method === "DELETE") {
+      const id = Number(placeMatch[1]);
+      const existing = this.sql.exec("SELECT id FROM places WHERE id = ?", id).toArray()[0];
+      if (!existing) return json({ error: "Lokasi tidak ditemukan" }, 404);
+      this.sql.exec("DELETE FROM places WHERE id = ?", id);
+      this.sql.exec("DELETE FROM device_place_state WHERE place_id = ?", id);
+      const places = this.listPlaces();
+      this.broadcast({ type: "places", places });
+      return json({ ok: true, places });
+    }
+
+    if (path === "/api/notifications" && request.method === "GET") {
+      return json({ notifications: this.listNotifications() });
     }
 
     if (path === "/api/users" && request.method === "GET") {
       if (user.role !== "admin") return json({ error: "Khusus admin" }, 403);
       const users = this.sql.exec(
-        "SELECT username, role, created_at FROM users ORDER BY created_at ASC"
+        "SELECT username, display_name, role, created_at FROM users ORDER BY created_at ASC"
       ).toArray();
       return json({ users });
     }
@@ -460,10 +921,11 @@ export class LocationHubCore {
       if (!body) return json({ error: "Payload JSON tidak valid" }, 400);
       const username = normalizeUsername(body.username);
       if (!username) {
-        return json({ error: "Username 2-32 karakter (huruf kecil, angka, titik, strip, underscore)" }, 400);
+        return json({ error: "Username hanya boleh huruf (2-32 huruf, tanpa angka/simbol)" }, 400);
       }
+      const displayName = normalizeDisplayName(body.display_name, username);
       if (!validPassword(body.password)) {
-        return json({ error: "Password minimal 6 karakter" }, 400);
+        return json({ error: "Password wajib diisi" }, 400);
       }
       const role = body.role === "admin" ? "admin" : "user";
       const exists = this.sql.exec("SELECT username FROM users WHERE username = ?", username).toArray();
@@ -471,35 +933,112 @@ export class LocationHubCore {
       const hash = await hashPassword(body.password);
       const now = Date.now();
       this.sql.exec(
-        "INSERT INTO users (username, password_hash, role, created_at) VALUES (?, ?, ?, ?)",
-        username, hash, role, now
+        "INSERT INTO users (username, display_name, password_hash, role, created_at) VALUES (?, ?, ?, ?, ?)",
+        username, displayName, hash, role, now
       );
-      return json({ ok: true, user: { username, role, created_at: now } }, 201);
+      return json({ ok: true, user: { username, display_name: displayName, role, created_at: now } }, 201);
     }
 
-    if (path === "/api/users/password" && request.method === "PATCH") {
+    const userItemMatch = path.match(/^\/api\/users\/([^/]+)$/);
+    if (userItemMatch && request.method === "PATCH") {
+      if (user.role !== "admin") return json({ error: "Khusus admin" }, 403);
+      const oldUsername = decodeURIComponent(userItemMatch[1]).trim().toLowerCase();
+      const existing = this.sql.exec(
+        "SELECT username, display_name, role FROM users WHERE username = ?",
+        oldUsername
+      ).toArray()[0];
+      if (!existing) return json({ error: "User tidak ditemukan" }, 404);
+
       const body = await this.readJson(request);
       if (!body) return json({ error: "Payload JSON tidak valid" }, 400);
-      const targetUsername = body.username ? normalizeUsername(body.username) : user.username;
-      if (!targetUsername) return json({ error: "Username tidak valid" }, 400);
-      if (targetUsername !== user.username && user.role !== "admin") {
-        return json({ error: "Khusus admin untuk ubah password user lain" }, 403);
+
+      const nextUsername = body.username !== undefined
+        ? normalizeUsername(body.username)
+        : existing.username;
+      if (!nextUsername) {
+        return json({ error: "Username hanya boleh huruf (2-32 huruf, tanpa angka/simbol)" }, 400);
       }
-      if (!validPassword(body.new_password)) {
-        return json({ error: "Password baru minimal 6 karakter" }, 400);
+      if (nextUsername !== existing.username) {
+        const dup = this.sql.exec("SELECT username FROM users WHERE username = ?", nextUsername).toArray();
+        if (dup.length) return json({ error: "Username baru sudah dipakai" }, 409);
       }
-      const rows = this.sql.exec("SELECT username FROM users WHERE username = ?", targetUsername).toArray();
-      if (!rows.length) return json({ error: "User tidak ditemukan" }, 404);
-      const hash = await hashPassword(body.new_password);
-      this.sql.exec("UPDATE users SET password_hash = ? WHERE username = ?", hash, targetUsername);
-      this.sql.exec("DELETE FROM sessions WHERE username = ? AND token != ?", targetUsername, user.token);
-      return json({ ok: true });
+
+      const nextDisplayName = body.display_name !== undefined
+        ? normalizeDisplayName(body.display_name, nextUsername)
+        : existing.display_name || nextUsername;
+
+      const nextRole = body.role === "admin" ? "admin" : body.role === "user" ? "user" : existing.role;
+      if (existing.username === user.username && nextRole !== "admin") {
+        return json({ error: "Admin tidak bisa menurunkan role dirinya sendiri" }, 400);
+      }
+
+      let newHash = null;
+      if (typeof body.password === "string" && body.password.length > 0) {
+        if (!validPassword(body.password)) {
+          return json({ error: "Password tidak valid" }, 400);
+        }
+        newHash = await hashPassword(body.password);
+      }
+
+      if (newHash) {
+        this.sql.exec(
+          "UPDATE users SET username = ?, display_name = ?, role = ?, password_hash = ? WHERE username = ?",
+          nextUsername, nextDisplayName, nextRole, newHash, existing.username
+        );
+      } else {
+        this.sql.exec(
+          "UPDATE users SET username = ?, display_name = ?, role = ? WHERE username = ?",
+          nextUsername, nextDisplayName, nextRole, existing.username
+        );
+      }
+
+      if (nextUsername !== existing.username) {
+        this.sql.exec("UPDATE sessions SET username = ? WHERE username = ?", nextUsername, existing.username);
+        const oldDevs = this.sql.exec(
+          "SELECT device_id FROM locations WHERE username = ?",
+          existing.username
+        ).toArray();
+        for (const d of oldDevs) {
+          const suffix = d.device_id.startsWith(`${existing.username}:`)
+            ? d.device_id.slice(existing.username.length + 1)
+            : d.device_id;
+          const nextDevId = `${nextUsername}:${suffix}`.slice(0, 80);
+          this.sql.exec(
+            "UPDATE locations SET device_id = ?, username = ? WHERE device_id = ?",
+            nextDevId, nextUsername, d.device_id
+          );
+          this.sql.exec(
+            "UPDATE location_history SET device_id = ?, username = ? WHERE device_id = ?",
+            nextDevId, nextUsername, d.device_id
+          );
+          this.sql.exec(
+            "UPDATE device_place_state SET device_id = ? WHERE device_id = ?",
+            nextDevId, d.device_id
+          );
+        }
+        this.sql.exec("UPDATE places SET created_by = ? WHERE created_by = ?", nextUsername, existing.username);
+      }
+
+      if (newHash) {
+        this.sql.exec("DELETE FROM sessions WHERE username = ? AND token != ?", nextUsername, user.token);
+      }
+
+      this.broadcast({
+        type: "snapshot",
+        devices: this.listLocations(),
+        places: this.listPlaces(),
+        notifications: this.listNotifications(),
+      });
+
+      return json({
+        ok: true,
+        user: { username: nextUsername, display_name: nextDisplayName, role: nextRole },
+      });
     }
 
-    const deleteUserMatch = path.match(/^\/api\/users\/([^/]+)$/);
-    if (deleteUserMatch && request.method === "DELETE") {
+    if (userItemMatch && request.method === "DELETE") {
       if (user.role !== "admin") return json({ error: "Khusus admin" }, 403);
-      const target = normalizeUsername(decodeURIComponent(deleteUserMatch[1]));
+      const target = decodeURIComponent(userItemMatch[1]).trim().toLowerCase();
       if (!target) return json({ error: "Username tidak valid" }, 400);
       if (target === user.username) {
         return json({ error: "Tidak bisa menghapus akun sendiri" }, 400);
@@ -513,8 +1052,10 @@ export class LocationHubCore {
       this.sql.exec("DELETE FROM sessions WHERE username = ?", target);
       this.sql.exec("DELETE FROM locations WHERE username = ?", target);
       this.sql.exec("DELETE FROM location_history WHERE username = ?", target);
+      this.sql.exec("DELETE FROM device_place_state WHERE device_id IN (SELECT device_id FROM locations WHERE username = ?)", target);
       this.sql.exec("DELETE FROM users WHERE username = ?", target);
       for (const deviceId of deviceIds) {
+        this.sql.exec("DELETE FROM device_place_state WHERE device_id = ?", deviceId);
         this.broadcast({ type: "device_removed", device_id: deviceId });
       }
       return json({ ok: true });
