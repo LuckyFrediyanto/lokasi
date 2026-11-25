@@ -64,11 +64,17 @@ function sendMsg(obj) {
 }
 
 map.on("click", function(e) {
-  if (!pickActive) return;
+  if (!pickActive) {
+    sendMsg({ type: "map_interact" });
+    return;
+  }
   const lat = e.latlng.lat;
   const lng = e.latlng.lng;
   updatePickVisual(lat, lng, pickCircle ? pickCircle.getRadius() : 50);
   sendMsg({ type: "picked", lat, lng });
+});
+map.on("dragstart", function() {
+  sendMsg({ type: "map_interact" });
 });
 
 function updatePickVisual(lat, lng, radius) {

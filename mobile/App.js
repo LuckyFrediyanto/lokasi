@@ -214,11 +214,17 @@ function AppInner() {
   const [adminErr, setAdminErr] = useState("");
 
   const screenH = Dimensions.get("window").height;
-  const sheetMin = 36;
-  const sheetMid = Math.round(screenH * 0.42);
-  const sheetMax = screenH;
+  const sheetMin = 28;
+  const sheetQuarter = Math.round(screenH * 0.25);
+  const sheetMid = Math.round(screenH * 0.50);
+  const sheetThreeQuarter = Math.round(screenH * 0.75);
+  const sheetMax = Math.round(screenH - (topInset + 24));
+  const sheetSnapPoints = [sheetMin, sheetQuarter, sheetMid, sheetThreeQuarter, sheetMax];
+
   const sheetHeight = useRef(new Animated.Value(sheetMid)).current;
   const currentSheetH = useRef(sheetMid);
+  const dragStartH = useRef(sheetMid);
+  const [sheetFull, setSheetFull] = useState(false);
 
   useEffect(() => {
     const id = sheetHeight.addListener((v) => {
@@ -230,22 +236,28 @@ function AppInner() {
   function animateSheetTo(target) {
     const clamped = Math.max(sheetMin, Math.min(sheetMax, target));
     currentSheetH.current = clamped;
+    setSheetFull(clamped >= sheetMax - 12);
     Animated.spring(sheetHeight, {
       toValue: clamped,
       friction: 9,
-      tension: 60,
+      tension: 65,
       useNativeDriver: false,
     }).start();
   }
 
   const topControlsOpacity = sheetHeight.interpolate({
-    inputRange: [sheetMid, sheetMax - 60, sheetMax],
-    outputRange: [1, 0.15, 0],
+    inputRange: [sheetThreeQuarter, sheetMax - 40, sheetMax],
+    outputRange: [1, 0.2, 0],
     extrapolate: "clamp",
   });
   const topControlsTranslateY = sheetHeight.interpolate({
-    inputRange: [sheetMid, sheetMax],
-    outputRange: [0, -50],
+    inputRange: [sheetThreeQuarter, sheetMax],
+    outputRange: [0, -45],
+    extrapolate: "clamp",
+  });
+  const backdropOpacity = sheetHeight.interpolate({
+    inputRange: [sheetThreeQuarter, sheetMax],
+    outputRange: [0, 0.45],
     extrapolate: "clamp",
   });
 
@@ -253,18 +265,41 @@ function AppInner() {
     PanResponder.create({
       onStartShouldSetPanResponder: () => true,
       onMoveShouldSetPanResponder: (_, gesture) => Math.abs(gesture.dy) > 3,
+      onPanResponderGrant: () => {
+        sheetHeight.stopAnimation((val) => {
+          dragStartH.current = val;
+          currentSheetH.current = val;
+        });
+      },
       onPanResponderMove: (_, gesture) => {
-        const next = Math.max(sheetMin, Math.min(sheetMax, currentSheetH.current - gesture.dy));
+        const next = Math.max(sheetMin, Math.min(sheetMax, dragStartH.current - gesture.dy));
         sheetHeight.setValue(next);
       },
       onPanResponderRelease: (_, gesture) => {
-        let finalH = currentSheetH.current - gesture.dy;
-        if (gesture.vy < -0.8 || finalH > screenH - 70) {
-          finalH = sheetMax;
-        } else if (gesture.vy > 0.8 || finalH < 70) {
-          finalH = sheetMin;
+        const rawH = Math.max(sheetMin, Math.min(sheetMax, dragStartH.current - gesture.dy));
+        let target = rawH;
+        if (Math.abs(gesture.vy) > 0.6) {
+          if (gesture.vy < 0) {
+            const nextUp = sheetSnapPoints.find((p) => p > rawH + 10);
+            target = nextUp !== undefined ? nextUp : sheetMax;
+          } else {
+            const rev = [...sheetSnapPoints].reverse();
+            const nextDown = rev.find((p) => p < rawH - 10);
+            target = nextDown !== undefined ? nextDown : sheetMin;
+          }
+        } else {
+          let best = sheetSnapPoints[0];
+          let minDiff = Math.abs(rawH - best);
+          for (const pt of sheetSnapPoints) {
+            const diff = Math.abs(rawH - pt);
+            if (diff < minDiff) {
+              minDiff = diff;
+              best = pt;
+            }
+          }
+          target = best;
         }
-        animateSheetTo(finalH);
+        animateSheetTo(target);
       },
     })
   ).current;
@@ -1113,6 +1148,10 @@ function AppInner() {
               if (msg.type === "select") {
                 const found = devices.find((d) => d.device_id === msg.device_id);
                 if (found) focusDevice(found);
+              } else if (msg.type === "map_interact") {
+                if (currentSheetH.current > sheetQuarter + 15) {
+                  animateSheetTo(sheetQuarter);
+                }
               } else if (msg.type === "picked" && typeof msg.lat === "number" && typeof msg.lng === "number") {
                 setPlaceLat(msg.lat);
                 setPlaceLng(msg.lng);
@@ -1206,6 +1245,17 @@ function AppInner() {
           <Text style={styles.toastText}>{toastMsg}</Text>
         </View>
       ) : null}
+
+      <Animated.View
+        pointerEvents={sheetFull ? "auto" : "none"}
+        style={[styles.mapBackdrop, { opacity: backdropOpacity }]}
+      >
+        <TouchableOpacity
+          style={{ flex: 1 }}
+          activeOpacity={1}
+          onPress={() => animateSheetTo(sheetMid)}
+        />
+      </Animated.View>
 
       <Animated.View style={[styles.bottomSheet, { height: sheetHeight }]}>
         <View {...panResponder.panHandlers} style={styles.sheetHandleArea}>
@@ -1882,12 +1932,26 @@ const styles = StyleSheet.create({
   btnDanger: { backgroundColor: "#dc2626", borderColor: "#dc2626" },
   btnDangerText: { color: "#ffffff", fontSize: 12, fontWeight: "700" },
   toastBar: {
+    position: "absolute",
+    left: 16,
+    right: 16,
+    borderRadius: 12,
     backgroundColor: "#0f172a",
     paddingHorizontal: 14,
-    paddingVertical: 8,
+    paddingVertical: 10,
+    zIndex: 40,
   },
-  toastText: { color: "#ffffff", fontSize: 12, fontWeight: "600" },
-  mapWrap: { flex: 1, backgroundColor: "#e2e8f0", position: "relative" },
+  toastText: { color: "#ffffff", fontSize: 12, fontWeight: "600", textAlign: "center" },
+  mapWrap: { flex: 1, backgroundColor: "#ffffff", position: "relative" },
+  mapBackdrop: {
+    position: "absolute",
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    backgroundColor: "#0f172a",
+    zIndex: 25,
+  },
   bottomSheet: {
     position: "absolute",
     left: 0,
@@ -1903,11 +1967,12 @@ const styles = StyleSheet.create({
     shadowColor: "#0f172a",
     shadowOpacity: 0.16,
     shadowRadius: 14,
-    elevation: 8,
+    elevation: 10,
+    zIndex: 30,
     overflow: "hidden",
   },
   sheetHandleArea: {
-    paddingVertical: 10,
+    paddingVertical: 11,
     alignItems: "center",
     justifyContent: "center",
     backgroundColor: "#ffffff",
@@ -1941,7 +2006,7 @@ const styles = StyleSheet.create({
   myLocFab: {
     position: "absolute",
     right: 12,
-    bottom: 90,
+    bottom: 44,
     width: 44,
     height: 44,
     borderRadius: 22,
@@ -1956,7 +2021,7 @@ const styles = StyleSheet.create({
     elevation: 5,
     zIndex: 10,
   },
-  list: { flex: 1, backgroundColor: "#f8fafc" },
+  list: { flex: 1, backgroundColor: "#ffffff" },
   devCard: {
     backgroundColor: "#ffffff",
     borderRadius: 12,
