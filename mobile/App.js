@@ -1913,8 +1913,9 @@ function AppInner() {
       </Modal>
       {batteryModal}
 
-      <Modal visible={permissionGateOpen} animationType="fade" transparent>
+      <Modal visible={permissionGateOpen} animationType="fade" transparent statusBarTranslucent>
         <View style={styles.modalBg}>
+          <View style={styles.permissionModalContent}>
           <View style={styles.permissionCard}>
             <Ionicons name="shield-checkmark" size={42} color="#0284c7" />
             <Text style={styles.confirmTitle}>Aktifkan Izin Wajib</Text>
@@ -1956,6 +1957,7 @@ function AppInner() {
               <Text style={styles.btnSmallText}>Periksa Lagi</Text>
             </TouchableOpacity>
           </View>
+          </View>
         </View>
       </Modal>
     </View>
@@ -1974,7 +1976,8 @@ const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: "#f8fafc" },
   fullPage: { flex: 1, backgroundColor: "#f8fafc" },
   mapPermissionOverlay: { position: "absolute", inset: 0, backgroundColor: "rgba(15,23,42,0.35)", zIndex: 50 },
-  permissionCard: { backgroundColor: "#ffffff", borderRadius: 18, padding: 20, borderWidth: 1, borderColor: "#e2e8f0", width: "100%", maxWidth: 380 },
+  permissionCard: { alignSelf: "center", backgroundColor: "#ffffff", borderRadius: 18, padding: 20, borderWidth: 1, borderColor: "#e2e8f0", width: "92%", maxWidth: 420 },
+  permissionModalContent: { flex: 1, width: "100%", alignItems: "center", justifyContent: "center", paddingHorizontal: 16 },
   permissionList: { gap: 10, marginTop: 14, marginBottom: 4 },
   permissionRow: { flexDirection: "row", alignItems: "center", gap: 9 },
   permissionText: { flex: 1, color: "#334155", fontSize: 13, fontWeight: "600" },
