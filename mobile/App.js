@@ -215,7 +215,7 @@ function AppInner() {
   const screenH = Dimensions.get("window").height;
   const sheetMin = 76;
   const sheetMid = Math.round(screenH * 0.42);
-  const sheetMax = Math.round(screenH - (topInset + 60));
+  const sheetMax = Math.round(screenH - (topInset + 8));
   const sheetHeight = useRef(new Animated.Value(sheetMid)).current;
   const currentSheetH = useRef(sheetMid);
 
@@ -226,6 +226,17 @@ function AppInner() {
     return () => sheetHeight.removeListener(id);
   }, [sheetHeight]);
 
+  const topControlsOpacity = sheetHeight.interpolate({
+    inputRange: [sheetMid, sheetMax - 30, sheetMax],
+    outputRange: [1, 0.2, 0],
+    extrapolate: "clamp",
+  });
+  const topControlsTranslateY = sheetHeight.interpolate({
+    inputRange: [sheetMid, sheetMax],
+    outputRange: [0, -40],
+    extrapolate: "clamp",
+  });
+
   const panResponder = useRef(
     PanResponder.create({
       onStartShouldSetPanResponder: () => true,
@@ -235,12 +246,13 @@ function AppInner() {
         sheetHeight.setValue(next);
       },
       onPanResponderRelease: (_, gesture) => {
-        const target = currentSheetH.current - gesture.dy;
         let snapTo = sheetMid;
-        if (gesture.vy < -0.5 || target > (sheetMid + sheetMax) / 2) {
+        if (gesture.dy < -20 || gesture.vy < -0.2) {
           snapTo = sheetMax;
-        } else if (gesture.vy > 0.5 || target < (sheetMin + sheetMid) / 2) {
-          snapTo = sheetMin;
+        } else if (gesture.dy > 20 || gesture.vy > 0.2) {
+          snapTo = currentSheetH.current > (sheetMid + sheetMax) / 2 ? sheetMid : sheetMin;
+        } else {
+          snapTo = currentSheetH.current > (sheetMid + sheetMax) / 2 ? sheetMax : sheetMid;
         }
         currentSheetH.current = snapTo;
         Animated.spring(sheetHeight, {
@@ -1051,70 +1063,8 @@ function AppInner() {
   }
 
   return (
-    <View style={[styles.container, { paddingBottom: bottomInset }]}>
-      <StatusBar style="dark" backgroundColor="#ffffff" translucent />
-      <View style={[styles.header, { paddingTop: topInset + 8 }]}>
-        <View style={[styles.row, { flexShrink: 1 }]}>
-          <View style={[styles.dot, { backgroundColor: wsOnline ? "#16a34a" : "#dc2626" }]} />
-          <Text style={styles.headerTitle} numberOfLines={1}>
-            {user.display_name || user.username}
-          </Text>
-        </View>
-        <View style={styles.row}>
-          <TouchableOpacity
-            style={[styles.iconBtn, panelMode === "places" && styles.iconBtnActive]}
-            onPress={togglePlacesPanel}
-            accessibilityLabel="Buat Lokasi"
-          >
-            <Ionicons
-              name={panelMode === "places" ? "location" : "location-outline"}
-              size={20}
-              color={panelMode === "places" ? "#0284c7" : "#0f172a"}
-            />
-          </TouchableOpacity>
-
-          <TouchableOpacity
-            style={[styles.iconBtn, panelMode === "notifs" && styles.iconBtnActive]}
-            onPress={toggleNotifsPanel}
-            accessibilityLabel="Notifikasi"
-          >
-            <Ionicons
-              name={panelMode === "notifs" ? "notifications" : "notifications-outline"}
-              size={20}
-              color={panelMode === "notifs" ? "#0284c7" : "#0f172a"}
-            />
-            {unreadNotifs > 0 ? (
-              <View style={styles.badgeCount}>
-                <Text style={styles.badgeCountText}>{unreadNotifs > 9 ? "9+" : unreadNotifs}</Text>
-              </View>
-            ) : null}
-          </TouchableOpacity>
-
-          {user.role === "admin" ? (
-            <TouchableOpacity
-              style={styles.iconBtn}
-              onPress={openAdmin}
-              accessibilityLabel="Kelola User"
-            >
-              <Ionicons name="people-outline" size={20} color="#0f172a" />
-            </TouchableOpacity>
-          ) : null}
-
-          <TouchableOpacity
-            style={[styles.iconBtn, styles.iconBtnDanger]}
-            onPress={confirmLogout}
-            accessibilityLabel="Keluar"
-          >
-            <Ionicons name="log-out-outline" size={20} color="#dc2626" />
-          </TouchableOpacity>
-        </View>
-      </View>
-
-      {toastMsg ? (
-        <View style={styles.toastBar}>
-          <Text style={styles.toastText}>{toastMsg}</Text>
-        </View>
-      ) : null}
+    <View style={styles.container}>
+      <StatusBar style="dark" backgroundColor="transparent" translucent />
 
       <View style={styles.mapWrap}>
         <WebView
@@ -1150,6 +1100,80 @@ function AppInner() {
           <Ionicons name="locate" size={22} color="#0284c7" />
         </TouchableOpacity>
       </View>
+
+      <Animated.View
+        pointerEvents="box-none"
+        style={[
+          styles.floatingHeader,
+          {
+            top: topInset + 6,
+            opacity: topControlsOpacity,
+            transform: [{ translateY: topControlsTranslateY }],
+          },
+        ]}
+      >
+        <View style={styles.floatingUserCard}>
+          <View style={[styles.dot, { backgroundColor: wsOnline ? "#16a34a" : "#dc2626" }]} />
+          <Text style={styles.floatingUserText} numberOfLines={1}>
+            {user.display_name || user.username}
+          </Text>
+        </View>
+
+        <View style={styles.floatingActions}>
+          <TouchableOpacity
+            style={[styles.floatingBtn, panelMode === "places" && styles.floatingBtnActive]}
+            onPress={togglePlacesPanel}
+            accessibilityLabel="Buat Lokasi"
+          >
+            <Ionicons
+              name={panelMode === "places" ? "location" : "location-outline"}
+              size={20}
+              color={panelMode === "places" ? "#0284c7" : "#0f172a"}
+            />
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            style={[styles.floatingBtn, panelMode === "notifs" && styles.floatingBtnActive]}
+            onPress={toggleNotifsPanel}
+            accessibilityLabel="Notifikasi"
+          >
+            <Ionicons
+              name={panelMode === "notifs" ? "notifications" : "notifications-outline"}
+              size={20}
+              color={panelMode === "notifs" ? "#0284c7" : "#0f172a"}
+            />
+            {unreadNotifs > 0 ? (
+              <View style={styles.badgeCount}>
+                <Text style={styles.badgeCountText}>{unreadNotifs > 9 ? "9+" : unreadNotifs}</Text>
+              </View>
+            ) : null}
+          </TouchableOpacity>
+
+          {user.role === "admin" ? (
+            <TouchableOpacity
+              style={styles.floatingBtn}
+              onPress={openAdmin}
+              accessibilityLabel="Kelola User"
+            >
+              <Ionicons name="people-outline" size={20} color="#0f172a" />
+            </TouchableOpacity>
+          ) : null}
+
+          <TouchableOpacity
+            style={[styles.floatingBtn, styles.floatingBtnDanger]}
+            onPress={confirmLogout}
+            accessibilityLabel="Keluar"
+          >
+            <Ionicons name="log-out-outline" size={20} color="#dc2626" />
+          </TouchableOpacity>
+        </View>
+      </Animated.View>
+
+      {toastMsg ? (
+        <View style={[styles.toastBar, { top: topInset + 54 }]}>
+          <Text style={styles.toastText}>{toastMsg}</Text>
+        </View>
+      ) : null}
 
       <Animated.View style={[styles.bottomSheet, { height: sheetHeight }]}>
         <View {...panResponder.panHandlers} style={styles.sheetHandleArea}>
@@ -1738,6 +1762,60 @@ const styles = StyleSheet.create({
     justifyContent: "space-between",
     gap: 8,
   },
+  floatingHeader: {
+    position: "absolute",
+    left: 12,
+    right: 12,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: 8,
+    zIndex: 20,
+  },
+  floatingUserCard: {
+    flexShrink: 1,
+    height: 42,
+    paddingHorizontal: 14,
+    borderRadius: 21,
+    backgroundColor: "#ffffff",
+    borderWidth: 1,
+    borderColor: "#e2e8f0",
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    shadowColor: "#0f172a",
+    shadowOpacity: 0.14,
+    shadowRadius: 8,
+    elevation: 4,
+  },
+  floatingUserText: {
+    color: "#0f172a",
+    fontWeight: "700",
+    fontSize: 14,
+    maxWidth: 160,
+  },
+  floatingActions: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 7,
+  },
+  floatingBtn: {
+    width: 42,
+    height: 42,
+    borderRadius: 21,
+    backgroundColor: "#ffffff",
+    borderWidth: 1,
+    borderColor: "#e2e8f0",
+    alignItems: "center",
+    justifyContent: "center",
+    shadowColor: "#0f172a",
+    shadowOpacity: 0.14,
+    shadowRadius: 8,
+    elevation: 4,
+    position: "relative",
+  },
+  floatingBtnActive: { backgroundColor: "#e0f2fe", borderColor: "#38bdf8" },
+  floatingBtnDanger: { backgroundColor: "#fee2e2", borderColor: "#fecaca" },
   headerTitle: { color: "#0f172a", fontWeight: "700", fontSize: 15, maxWidth: 150 },
   row: { flexDirection: "row", alignItems: "center", gap: 7 },
   dot: { width: 9, height: 9, borderRadius: 5 },
