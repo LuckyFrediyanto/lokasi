@@ -88,7 +88,7 @@ function osmMiniTile(lat, lng, z = 16) {
   const px = Math.max(12, Math.min(88, (xFloat - x) * 100));
   const py = Math.max(12, Math.min(88, (yFloat - y) * 100));
   return {
-    url: `https://a.basemaps.cartocdn.com/rastertiles/voyager/${z}/${x}/${y}.png`,
+    url: `https://mt1.google.com/vt/lyrs=m&x=${x}&y=${y}&z=${z}&hl=id`,
     px,
     py,
   };

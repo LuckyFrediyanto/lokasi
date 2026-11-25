@@ -201,7 +201,7 @@ function osmTile(lat, lng, z = 16) {
   const lr = (lat * Math.PI) / 180;
   const yf = ((1 - Math.log(Math.tan(lr) + 1 / Math.cos(lr)) / Math.PI) / 2) * n;
   return {
-    url: "https://a.basemaps.cartocdn.com/rastertiles/voyager/" + z + "/" + Math.floor(xf) + "/" + Math.floor(yf) + ".png",
+    url: "https://mt1.google.com/vt/lyrs=m&x=" + Math.floor(xf) + "&y=" + Math.floor(yf) + "&z=" + z + "&hl=id",
     px: Math.max(12, Math.min(88, (xf - Math.floor(xf)) * 100)),
     py: Math.max(12, Math.min(88, (yf - Math.floor(yf)) * 100))
   };
@@ -239,10 +239,10 @@ async function api(path, opts = {}) {
 function initMap() {
   if (map) return;
   map = L.map("map").setView([-6.8, 110.84], 13);
-  L.tileLayer("https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}.png", {
-    maxZoom: 19,
-    subdomains: "abcd",
-    attribution: "&copy; OSM &copy; CARTO"
+  L.tileLayer("https://mt{s}.google.com/vt/lyrs=m&x={x}&y={y}&z={z}&hl=id", {
+    maxZoom: 20,
+    subdomains: ["0", "1", "2", "3"],
+    attribution: "&copy; Google Maps"
   }).addTo(map);
 }
 

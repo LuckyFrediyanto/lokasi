@@ -34,10 +34,10 @@ export const MAP_HTML = `<!doctype html>
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script>
 const map = L.map("map", { zoomControl: true }).setView([-6.8, 110.84], 13);
-L.tileLayer("https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}.png", {
-  maxZoom: 19,
-  subdomains: "abcd",
-  attribution: "&copy; OSM &copy; CARTO"
+L.tileLayer("https://mt{s}.google.com/vt/lyrs=m&x={x}&y={y}&z={z}&hl=id", {
+  maxZoom: 20,
+  subdomains: ["0", "1", "2", "3"],
+  attribution: "&copy; Google Maps"
 }).addTo(map);
 
 const markers = new Map();
