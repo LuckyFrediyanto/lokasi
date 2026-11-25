@@ -110,6 +110,20 @@ export const DASHBOARD_HTML = `<!doctype html>
 
 <div id="toast" class="toast hidden"></div>
 
+<div id="logoutModal" class="modal-bg hidden">
+  <div class="modal" style="max-width:340px;text-align:center">
+    <div style="width:48px;height:48px;border-radius:50%;background:#fee2e2;color:#dc2626;display:inline-flex;align-items:center;justify-content:center;margin-bottom:10px">
+      <svg style="width:24px;height:24px;fill:currentColor" viewBox="0 0 24 24"><path d="M17 7l-1.41 1.41L18.17 11H8v2h10.17l-2.58 2.58L17 17l5-5zM4 5h8V3H4c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h8v-2H4V5z"/></svg>
+    </div>
+    <div style="font-size:17px;font-weight:700;margin-bottom:6px">Keluar dari Akun?</div>
+    <div class="meta" style="margin-bottom:16px">Anda perlu masuk lagi untuk memantau lokasi perangkat.</div>
+    <div style="display:flex;gap:8px">
+      <button class="sec" style="flex:1;padding:10px" id="cancelLogoutBtn" type="button">Batal</button>
+      <button class="danger" style="flex:1;padding:10px" id="confirmLogoutBtn" type="button">Ya, Keluar</button>
+    </div>
+  </div>
+</div>
+
 <div id="adminModal" class="modal-bg hidden">
   <div class="modal">
     <div class="dev-top" style="margin-bottom:10px">
@@ -187,7 +201,7 @@ function osmTile(lat, lng, z = 16) {
   const lr = (lat * Math.PI) / 180;
   const yf = ((1 - Math.log(Math.tan(lr) + 1 / Math.cos(lr)) / Math.PI) / 2) * n;
   return {
-    url: "https://tile.openstreetmap.org/" + z + "/" + Math.floor(xf) + "/" + Math.floor(yf) + ".png",
+    url: "https://a.basemaps.cartocdn.com/rastertiles/voyager/" + z + "/" + Math.floor(xf) + "/" + Math.floor(yf) + ".png",
     px: Math.max(12, Math.min(88, (xf - Math.floor(xf)) * 100)),
     py: Math.max(12, Math.min(88, (yf - Math.floor(yf)) * 100))
   };
@@ -225,9 +239,10 @@ async function api(path, opts = {}) {
 function initMap() {
   if (map) return;
   map = L.map("map").setView([-6.8, 110.84], 13);
-  L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+  L.tileLayer("https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}.png", {
     maxZoom: 19,
-    attribution: "&copy; OpenStreetMap"
+    subdomains: "abcd",
+    attribution: "&copy; OSM &copy; CARTO"
   }).addTo(map);
 }
 
@@ -443,8 +458,14 @@ document.getElementById("loginForm").onsubmit = async (e) => {
   }
 };
 
-document.getElementById("logoutBtn").onclick = async () => {
-  if (!confirm("Yakin ingin keluar dari akun ini?")) return;
+document.getElementById("logoutBtn").onclick = () => {
+  document.getElementById("logoutModal").classList.remove("hidden");
+};
+document.getElementById("cancelLogoutBtn").onclick = () => {
+  document.getElementById("logoutModal").classList.add("hidden");
+};
+document.getElementById("confirmLogoutBtn").onclick = async () => {
+  document.getElementById("logoutModal").classList.add("hidden");
   try { await api("/api/auth/logout", { method: "POST" }); } catch {}
   token = "";
   localStorage.removeItem(LS_TOKEN);

@@ -242,6 +242,29 @@ assert.ok(hist.segments[1].distance_km > 1.0);
 assert.equal(hist.segments[2].type, "stay");
 assert.equal(hist.segments[2].label, "Kantor");
 
+const jitterT = Date.now() - 120000;
+for (const pt of [
+  { lat: -6.82000, lng: 110.86000, accuracy: 12, timestamp: jitterT },
+  { lat: -6.82010, lng: 110.86008, accuracy: 15, timestamp: jitterT + 30000 },
+  { lat: -6.82005, lng: 110.86015, accuracy: 18, timestamp: jitterT + 60000 },
+  { lat: -6.82002, lng: 110.86004, accuracy: 10, timestamp: jitterT + 90000 },
+]) {
+  res = await hub.handleApi(req("/api/location", {
+    method: "POST",
+    token: luckyAuth2.token,
+    body: { device_id: "stilldev", platform: "android", device_name: "Poco", ...pt },
+  }));
+  assert.equal(res.status, 200);
+}
+res = await hub.handleApi(req("/api/locations/lucky%3Astilldev/history?days=1", {
+  token: adminAuth.token,
+}));
+assert.equal(res.status, 200);
+const stillHist = await res.json();
+assert.equal(stillHist.total_distance_km, 0);
+assert.equal(stillHist.segments.length, 1);
+assert.equal(stillHist.segments[0].type, "stay");
+
 res = await hub.handleApi(req("/api/admin/logout-all", {
   method: "POST",
   token: adminAuth.token,

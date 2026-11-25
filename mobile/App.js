@@ -1,5 +1,6 @@
 import React, { useEffect, useRef, useState } from "react";
 import {
+  ActivityIndicator,
   Alert,
   Image,
   Linking,
@@ -87,7 +88,7 @@ function osmMiniTile(lat, lng, z = 16) {
   const px = Math.max(12, Math.min(88, (xFloat - x) * 100));
   const py = Math.max(12, Math.min(88, (yFloat - y) * 100));
   return {
-    url: `https://tile.openstreetmap.org/${z}/${x}/${y}.png`,
+    url: `https://a.basemaps.cartocdn.com/rastertiles/voyager/${z}/${x}/${y}.png`,
     px,
     py,
   };
@@ -192,6 +193,7 @@ function AppInner() {
 
   const [ringingTargets, setRingingTargets] = useState({});
   const [ringCaller, setRingCaller] = useState(null);
+  const [logoutModalOpen, setLogoutModalOpen] = useState(false);
   const [batteryPromptOpen, setBatteryPromptOpen] = useState(false);
   const [batteryOpenedOnce, setBatteryOpenedOnce] = useState(false);
 
@@ -504,13 +506,11 @@ function AppInner() {
   }
 
   function confirmLogout() {
-    Alert.alert("Konfirmasi Keluar", "Yakin ingin keluar dari akun ini?", [
-      { text: "Batal", style: "cancel" },
-      { text: "Keluar", style: "destructive", onPress: handleLogout },
-    ]);
+    setLogoutModalOpen(true);
   }
 
   async function handleLogout() {
+    setLogoutModalOpen(false);
     try {
       await stopLoudRing();
       if (watchSubRef.current) {
@@ -914,9 +914,9 @@ function AppInner() {
 
   if (booting) {
     return (
-      <View style={[styles.center, { paddingTop: topInset + 20, paddingBottom: bottomInset + 20 }]}>
+      <View style={styles.loadingScreen}>
         <StatusBar style="dark" backgroundColor="#f8fafc" translucent />
-        <Text style={styles.muted}>Memuat...</Text>
+        <ActivityIndicator size="large" color="#0284c7" />
       </View>
     );
   }
@@ -955,7 +955,31 @@ function AppInner() {
             <Text style={styles.btnPrimaryText}>{busy ? "Masuk..." : "Masuk"}</Text>
           </TouchableOpacity>
         </View>
-        {batteryModal}
+      <Modal visible={logoutModalOpen} animationType="fade" transparent>
+        <View style={styles.modalBg}>
+          <View style={styles.confirmCard}>
+            <View style={styles.confirmIconWrap}>
+              <Ionicons name="log-out-outline" size={28} color="#dc2626" />
+            </View>
+            <Text style={styles.confirmTitle}>Keluar dari Akun?</Text>
+            <Text style={styles.confirmSub}>
+              Pelacakan lokasi akan berhenti sementara sampai Anda masuk kembali.
+            </Text>
+            <View style={styles.confirmActions}>
+              <TouchableOpacity
+                style={styles.confirmCancelBtn}
+                onPress={() => setLogoutModalOpen(false)}
+              >
+                <Text style={styles.confirmCancelText}>Batal</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={styles.confirmOkBtn} onPress={handleLogout}>
+                <Text style={styles.confirmOkText}>Ya, Keluar</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
+      {batteryModal}
       </View>
     );
   }
@@ -1496,6 +1520,7 @@ export default function App() {
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: "#f8fafc" },
+  loadingScreen: { flex: 1, backgroundColor: "#f8fafc", justifyContent: "center", alignItems: "center" },
   center: { flex: 1, backgroundColor: "#f8fafc", justifyContent: "center", padding: 20 },
   card: {
     backgroundColor: "#ffffff",
@@ -1674,6 +1699,48 @@ const styles = StyleSheet.create({
   alarmSub: { color: "#334155", fontSize: 13, marginTop: 6, textAlign: "center" },
   alarmStopBtn: { backgroundColor: "#dc2626", paddingHorizontal: 28, paddingVertical: 14, borderRadius: 12, marginTop: 18, width: "100%", alignItems: "center" },
   alarmStopText: { color: "#ffffff", fontSize: 16, fontWeight: "800" },
+  confirmCard: {
+    backgroundColor: "#ffffff",
+    borderRadius: 20,
+    padding: 22,
+    borderWidth: 1,
+    borderColor: "#e2e8f0",
+    alignItems: "center",
+    shadowColor: "#0f172a",
+    shadowOpacity: 0.14,
+    shadowRadius: 18,
+    elevation: 6,
+  },
+  confirmIconWrap: {
+    width: 56,
+    height: 56,
+    borderRadius: 28,
+    backgroundColor: "#fee2e2",
+    alignItems: "center",
+    justifyContent: "center",
+    marginBottom: 12,
+  },
+  confirmTitle: { color: "#0f172a", fontSize: 18, fontWeight: "700", textAlign: "center" },
+  confirmSub: { color: "#64748b", fontSize: 13, textAlign: "center", marginTop: 6, lineHeight: 19 },
+  confirmActions: { flexDirection: "row", gap: 10, marginTop: 18, width: "100%" },
+  confirmCancelBtn: {
+    flex: 1,
+    backgroundColor: "#f1f5f9",
+    borderWidth: 1,
+    borderColor: "#e2e8f0",
+    paddingVertical: 12,
+    borderRadius: 12,
+    alignItems: "center",
+  },
+  confirmCancelText: { color: "#0f172a", fontSize: 14, fontWeight: "700" },
+  confirmOkBtn: {
+    flex: 1,
+    backgroundColor: "#dc2626",
+    paddingVertical: 12,
+    borderRadius: 12,
+    alignItems: "center",
+  },
+  confirmOkText: { color: "#ffffff", fontSize: 14, fontWeight: "700" },
   userRow: {
     flexDirection: "row",
     justifyContent: "space-between",

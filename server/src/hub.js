@@ -1,8 +1,11 @@
 const SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 const HISTORY_LIMIT = 2000;
 const HISTORY_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
-const STAY_RADIUS_M = 60;
+const STAY_RADIUS_M = 100;
 const STAY_MIN_MS = 3 * 60 * 1000;
+const TRIP_MIN_DISTANCE_M = 150;
+const TRIP_MIN_EXCURSION_M = 100;
+const MAX_TRUSTED_ACCURACY_M = 80;
 const NOTIF_LIMIT = 50;
 const ONLINE_WINDOW_MS = 90 * 1000;
 const PBKDF2_ITERATIONS = 100000;
@@ -801,12 +804,15 @@ export class LocationHubCore {
       since
     ).toArray();
 
+    const hasAccurate = rawRows.some((r) => r.accuracy == null || Number(r.accuracy) <= MAX_TRUSTED_ACCURACY_M);
     const points = [];
     for (const r of rawRows) {
+      const acc = r.accuracy != null ? Number(r.accuracy) : null;
+      if (hasAccurate && acc !== null && acc > MAX_TRUSTED_ACCURACY_M) continue;
       const pt = {
         lat: Number(r.lat),
         lng: Number(r.lng),
-        accuracy: r.accuracy != null ? Number(r.accuracy) : null,
+        accuracy: acc,
         battery: r.battery != null ? Number(r.battery) : null,
         recorded_at: Number(r.recorded_at),
       };
@@ -820,7 +826,7 @@ export class LocationHubCore {
     }
 
     if (!points.length) {
-      return { device_id: deviceId, days: clampedDays, total_distance_km: 0, points: [], segments: [] };
+      return { device_id: deviceId, days: clampedDays, total_distance_km: 0, points: [], route_points: [], segments: [] };
     }
 
     const places = this.listPlaces();
@@ -836,7 +842,7 @@ export class LocationHubCore {
       }
       const stayEnd = j - 1;
       const stayDur = points[stayEnd].recorded_at - points[i].recorded_at;
-      if (stayDur >= STAY_MIN_MS || points.length === 1) {
+      if (stayDur >= STAY_MIN_MS || j >= points.length) {
         let sumLat = 0;
         let sumLng = 0;
         const count = stayEnd - i + 1;
@@ -871,28 +877,65 @@ export class LocationHubCore {
       const tripEnd = Math.min(k, points.length - 1);
       const slice = points.slice(tripStart, tripEnd + 1);
       let distM = 0;
+      let maxExcursion = 0;
       for (let s = 1; s < slice.length; s++) {
         distM += haversineMeters(slice[s - 1].lat, slice[s - 1].lng, slice[s].lat, slice[s].lng);
+        const exc = haversineMeters(slice[0].lat, slice[0].lng, slice[s].lat, slice[s].lng);
+        if (exc > maxExcursion) maxExcursion = exc;
       }
-      rawSegs.push({
-        type: "trip",
-        start_at: slice[0].recorded_at,
-        end_at: slice[slice.length - 1].recorded_at,
-        distance_km: Number((distM / 1000).toFixed(2)),
-        start_lat: slice[0].lat,
-        start_lng: slice[0].lng,
-        end_lat: slice[slice.length - 1].lat,
-        end_lng: slice[slice.length - 1].lng,
-        points: slice.map((p) => [p.lat, p.lng]),
-      });
+      if (distM < TRIP_MIN_DISTANCE_M || maxExcursion < TRIP_MIN_EXCURSION_M) {
+        let sumLat = 0;
+        let sumLng = 0;
+        for (const p of slice) {
+          sumLat += p.lat;
+          sumLng += p.lng;
+        }
+        rawSegs.push({
+          type: "stay",
+          start_at: slice[0].recorded_at,
+          end_at: slice[slice.length - 1].recorded_at,
+          lat: sumLat / slice.length,
+          lng: sumLng / slice.length,
+        });
+      } else {
+        rawSegs.push({
+          type: "trip",
+          start_at: slice[0].recorded_at,
+          end_at: slice[slice.length - 1].recorded_at,
+          distance_km: Number((distM / 1000).toFixed(2)),
+          start_lat: slice[0].lat,
+          start_lng: slice[0].lng,
+          end_lat: slice[slice.length - 1].lat,
+          end_lng: slice[slice.length - 1].lng,
+          points: slice.map((p) => [p.lat, p.lng]),
+        });
+      }
       i = k < points.length ? k : points.length;
+    }
+
+    const mergedSegs = [];
+    for (const seg of rawSegs) {
+      const prev = mergedSegs[mergedSegs.length - 1];
+      if (
+        prev &&
+        prev.type === "stay" &&
+        seg.type === "stay" &&
+        haversineMeters(prev.lat, prev.lng, seg.lat, seg.lng) <= STAY_RADIUS_M * 1.2
+      ) {
+        prev.end_at = Math.max(prev.end_at, seg.end_at);
+        prev.lat = (prev.lat + seg.lat) / 2;
+        prev.lng = (prev.lng + seg.lng) / 2;
+      } else {
+        mergedSegs.push(seg);
+      }
     }
 
     const remoteBudget = { remaining: 8 };
     const segments = [];
+    const routePoints = [];
     let totalKm = 0;
 
-    for (const seg of rawSegs) {
+    for (const seg of mergedSegs) {
       const durationMin = Math.max(1, Math.round((seg.end_at - seg.start_at) / 60000));
       if (seg.type === "stay") {
         const label = await this.resolvePlaceLabel(seg.lat, seg.lng, places, remoteBudget);
@@ -907,6 +950,9 @@ export class LocationHubCore {
         });
       } else {
         totalKm += seg.distance_km;
+        for (const [plat, plng] of seg.points) {
+          routePoints.push({ lat: plat, lng: plng });
+        }
         const fromLabel = await this.resolvePlaceLabel(seg.start_lat, seg.start_lng, places, remoteBudget);
         const toLabel = await this.resolvePlaceLabel(seg.end_lat, seg.end_lng, places, remoteBudget);
         segments.push({
@@ -930,7 +976,7 @@ export class LocationHubCore {
       device_id: deviceId,
       days: clampedDays,
       total_distance_km: Number(totalKm.toFixed(2)),
-      points,
+      points: routePoints.length ? routePoints : [{ lat: points[points.length - 1].lat, lng: points[points.length - 1].lng }],
       segments,
     };
   }

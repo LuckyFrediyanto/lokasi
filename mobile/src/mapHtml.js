@@ -34,9 +34,10 @@ export const MAP_HTML = `<!doctype html>
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script>
 const map = L.map("map", { zoomControl: true }).setView([-6.8, 110.84], 13);
-L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+L.tileLayer("https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}.png", {
   maxZoom: 19,
-  attribution: "&copy; OSM"
+  subdomains: "abcd",
+  attribution: "&copy; OSM &copy; CARTO"
 }).addTo(map);
 
 const markers = new Map();
