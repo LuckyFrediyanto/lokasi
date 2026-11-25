@@ -530,7 +530,7 @@ function AppInner() {
           if (ws.readyState === 1) {
             ws.send(JSON.stringify({ type: "heartbeat", device_id: myDeviceId }));
           }
-        }, 10000);
+        }, 25000);
       };
       ws.onmessage = (ev) => {
         try {
@@ -600,11 +600,13 @@ function AppInner() {
 
     syncTimer = setInterval(async () => {
       try {
-        await apiRequest("/api/heartbeat", {
-          method: "POST",
-          token,
-          body: { device_id: myDeviceId },
-        });
+        if (!wsRef.current || wsRef.current.readyState !== 1) {
+          await apiRequest("/api/heartbeat", {
+            method: "POST",
+            token,
+            body: { device_id: myDeviceId },
+          });
+        }
         const data = await apiRequest("/api/locations", { token });
         if (alive && Array.isArray(data.devices)) {
           setDevices(
@@ -1640,7 +1642,7 @@ function AppInner() {
             </Text>
           ) : (
             devices.map((d) => {
-              const online = Date.now() - (d.last_seen || d.updated_at) < 5 * 60 * 1000;
+              const online = Date.now() - (d.last_seen || d.updated_at) < 60000;
               const bat = d.battery != null ? `${Math.round(d.battery)}%${d.charging ? " ⚡" : ""}` : "-";
               const acc = d.accuracy != null ? `${Math.round(d.accuracy)}m` : "-";
               const pLabel = d.platform === "ios" ? "iOS" : "Android";

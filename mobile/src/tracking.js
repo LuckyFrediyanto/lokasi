@@ -111,9 +111,9 @@ export async function startForegroundWatch() {
   if (fg.status !== "granted") return null;
   return Location.watchPositionAsync(
     {
-      accuracy: Location.Accuracy.BestForNavigation,
-      timeInterval: 5000,
-      distanceInterval: 5,
+      accuracy: Location.Accuracy.Balanced,
+      timeInterval: 15000,
+      distanceInterval: 10,
     },
     (pos) => {
       if (pos && pos.coords) {
@@ -148,16 +148,16 @@ export async function startBackgroundTracking() {
     try { await Location.stopLocationUpdatesAsync(LOCATION_TASK_NAME); } catch {}
   }
   await Location.startLocationUpdatesAsync(LOCATION_TASK_NAME, {
-    accuracy: Location.Accuracy.High,
-    timeInterval: 5000,
-    distanceInterval: 0,
-    deferredUpdatesInterval: 5000,
+    accuracy: Location.Accuracy.Balanced,
+    timeInterval: 20000,
+    distanceInterval: 15,
+    deferredUpdatesInterval: 20000,
     showsBackgroundLocationIndicator: true,
     pausesUpdatesAutomatically: false,
     activityType: Location.ActivityType.Other,
     foregroundService: {
-      notificationTitle: "Lacak HP Selalu Aktif",
-      notificationBody: "Siaga melacak lokasi & menerima panggilan bunyikan HP.",
+      notificationTitle: "Lacak HP Aktif",
+      notificationBody: "Melacak lokasi di latar belakang.",
       notificationColor: "#0284c7",
       killServiceOnDestroy: false,
     },
