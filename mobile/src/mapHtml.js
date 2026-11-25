@@ -1,9 +1,11 @@
+import { SERVER_URL } from "./config.js";
+
 export const MAP_HTML = `<!doctype html>
 <html lang="id">
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no" />
-<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css" />
 <style>
   html,body,#map { margin:0; padding:0; width:100%; height:100%; background:#e2e8f0; }
   .user-pin {
@@ -31,14 +33,15 @@ export const MAP_HTML = `<!doctype html>
 </head>
 <body>
 <div id="map"></div>
-<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
 <script>
 const map = L.map("map", { zoomControl: true }).setView([-6.8, 110.84], 13);
-L.tileLayer("https://mt{s}.google.com/vt/lyrs=m&x={x}&y={y}&z={z}&hl=id", {
+L.tileLayer("${SERVER_URL}/api/tile/{z}/{x}/{y}.png", {
   maxZoom: 20,
-  subdomains: ["0", "1", "2", "3"],
-  attribution: "&copy; Google Maps"
+  attribution: "&copy; Maps"
 }).addTo(map);
+setTimeout(() => map.invalidateSize(), 150);
+setTimeout(() => map.invalidateSize(), 700);
 
 const markers = new Map();
 let historyLayers = [];
@@ -113,7 +116,7 @@ window.updateDevices = function(list) {
     if (d.platform !== "ios" && d.platform !== "android") return;
     seen.add(d.device_id);
     const online = Date.now() - (d.last_seen || d.updated_at) < 90000;
-    const col = d.color || "#38bdf8";
+    const col = d.color || "#0284c7";
     const html = '<div class="user-pin" style="background:' + esc(col) + '">' + USER_SVG + '<span class="st ' + (online ? "" : "old") + '"></span></div>';
     const icon = L.divIcon({ className: "", html, iconSize: [36, 36], iconAnchor: [18, 18] });
     if (markers.has(d.device_id)) {

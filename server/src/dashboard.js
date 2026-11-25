@@ -4,7 +4,7 @@ export const DASHBOARD_HTML = `<!doctype html>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no" />
 <title>Lacak HP</title>
-<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css" />
 <style>
   :root { --bg:#f8fafc; --card:#ffffff; --line:#e2e8f0; --text:#0f172a; --muted:#64748b; --blue:#0284c7; --green:#16a34a; --red:#dc2626; --soft:#f1f5f9; }
   * { box-sizing:border-box; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif; }
@@ -124,15 +124,19 @@ export const DASHBOARD_HTML = `<!doctype html>
   </div>
 </div>
 
-<div id="adminModal" class="modal-bg hidden">
-  <div class="modal">
-    <div class="dev-top" style="margin-bottom:10px">
-      <strong id="adminFormTitle">Tambah User</strong>
-      <button class="sec" id="closeAdmin" type="button">Tutup</button>
+<div id="adminView" class="hidden" style="height:100%;display:flex;flex-direction:column;background:var(--bg)">
+  <header>
+    <div class="brand">
+      <button class="icon-btn" id="closeAdmin" type="button" title="Kembali">
+        <svg viewBox="0 0 24 24"><path d="M20 11H7.83l5.59-5.59L12 4l-8 8 8 8 1.41-1.41L7.83 13H20v-2z"/></svg>
+      </button>
+      <span id="adminFormTitle">Kelola User</span>
     </div>
-    <form id="userForm">
+  </header>
+  <div style="flex:1;overflow:auto;padding:16px;max-width:640px;width:100%;margin:0 auto;display:flex;flex-direction:column;gap:14px">
+    <form class="dev" id="userForm" style="padding:16px">
       <input type="hidden" id="editOriginalU" value="" />
-      <label>Username (huruf saja)</label>
+      <label style="margin-top:0">Username (huruf saja)</label>
       <input id="newU" required placeholder="lucky" />
       <label>Nama (tampil di peta &amp; notifikasi)</label>
       <input id="newN" required placeholder="Lucky Frediyanto" />
@@ -146,11 +150,14 @@ export const DASHBOARD_HTML = `<!doctype html>
       </div>
       <div class="err" id="adminErr"></div>
     </form>
-    <div id="usersList" style="margin-top:14px"></div>
+    <div class="dev" style="padding:14px">
+      <div style="font-weight:700;font-size:14px;margin-bottom:6px">Daftar User</div>
+      <div id="usersList"></div>
+    </div>
   </div>
 </div>
 
-<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
 <script>
 const LS_TOKEN = "lacak_token";
 let token = localStorage.getItem(LS_TOKEN) || "";
@@ -201,7 +208,7 @@ function osmTile(lat, lng, z = 16) {
   const lr = (lat * Math.PI) / 180;
   const yf = ((1 - Math.log(Math.tan(lr) + 1 / Math.cos(lr)) / Math.PI) / 2) * n;
   return {
-    url: "https://mt1.google.com/vt/lyrs=m&x=" + Math.floor(xf) + "&y=" + Math.floor(yf) + "&z=" + z + "&hl=id",
+    url: "/api/tile/" + z + "/" + Math.floor(xf) + "/" + Math.floor(yf) + ".png",
     px: Math.max(12, Math.min(88, (xf - Math.floor(xf)) * 100)),
     py: Math.max(12, Math.min(88, (yf - Math.floor(yf)) * 100))
   };
@@ -239,10 +246,9 @@ async function api(path, opts = {}) {
 function initMap() {
   if (map) return;
   map = L.map("map").setView([-6.8, 110.84], 13);
-  L.tileLayer("https://mt{s}.google.com/vt/lyrs=m&x={x}&y={y}&z={z}&hl=id", {
+  L.tileLayer("/api/tile/{z}/{x}/{y}.png", {
     maxZoom: 20,
-    subdomains: ["0", "1", "2", "3"],
-    attribution: "&copy; Google Maps"
+    attribution: "&copy; Maps"
   }).addTo(map);
 }
 
@@ -545,10 +551,15 @@ window.delUser = async (u) => {
 
 document.getElementById("adminBtn").onclick = async () => {
   resetUserForm();
-  document.getElementById("adminModal").classList.remove("hidden");
+  document.getElementById("appView").classList.add("hidden");
+  document.getElementById("adminView").classList.remove("hidden");
   await loadUsers();
 };
-document.getElementById("closeAdmin").onclick = () => document.getElementById("adminModal").classList.add("hidden");
+document.getElementById("closeAdmin").onclick = () => {
+  document.getElementById("adminView").classList.add("hidden");
+  document.getElementById("appView").classList.remove("hidden");
+  if (map) setTimeout(() => map.invalidateSize(), 100);
+};
 document.getElementById("cancelEditBtn").onclick = resetUserForm;
 document.getElementById("newU").oninput = (e) => {
   e.target.value = e.target.value.toLowerCase().replace(/[^a-z]/g, "");

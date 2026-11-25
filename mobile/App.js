@@ -23,7 +23,7 @@ import * as Notifications from "expo-notifications";
 import * as SecureStore from "expo-secure-store";
 import * as IntentLauncher from "expo-intent-launcher";
 import { WebView } from "react-native-webview";
-import { STORE_KEYS, toWsUrl } from "./src/config";
+import { SERVER_URL, STORE_KEYS, toWsUrl } from "./src/config";
 import { startLoudRing, stopLoudRing } from "./src/alarm";
 import {
   apiRequest,
@@ -88,7 +88,7 @@ function osmMiniTile(lat, lng, z = 16) {
   const px = Math.max(12, Math.min(88, (xFloat - x) * 100));
   const py = Math.max(12, Math.min(88, (yFloat - y) * 100));
   return {
-    url: `https://mt1.google.com/vt/lyrs=m&x=${x}&y=${y}&z=${z}&hl=id`,
+    url: `${SERVER_URL}/api/tile/${z}/${x}/${y}.png`,
     px,
     py,
   };
@@ -509,24 +509,11 @@ function AppInner() {
     setLogoutModalOpen(true);
   }
 
-  async function handleLogout() {
+  function handleLogout() {
+    const oldToken = token;
+    const oldDevId = myDeviceId;
     setLogoutModalOpen(false);
-    try {
-      await stopLoudRing();
-      if (watchSubRef.current) {
-        watchSubRef.current.remove();
-        watchSubRef.current = null;
-      }
-      await stopBackgroundTracking();
-      if (token) {
-        await apiRequest("/api/auth/logout", {
-          method: "POST",
-          token,
-          body: { device_id: myDeviceId },
-        });
-      }
-    } catch {}
-    await clearSession();
+    setAdminOpen(false);
     setRingCaller(null);
     setBgActive(false);
     setPanelMode("devices");
@@ -537,6 +524,24 @@ function AppInner() {
     setDevices([]);
     setPlaces([]);
     setNotifications([]);
+    if (wsRef.current) {
+      try { wsRef.current.close(); } catch {}
+      wsRef.current = null;
+    }
+    if (watchSubRef.current) {
+      try { watchSubRef.current.remove(); } catch {}
+      watchSubRef.current = null;
+    }
+    clearSession().catch(() => {});
+    stopLoudRing().catch(() => {});
+    stopBackgroundTracking().catch(() => {});
+    if (oldToken) {
+      apiRequest("/api/auth/logout", {
+        method: "POST",
+        token: oldToken,
+        body: { device_id: oldDevId },
+      }).catch(() => {});
+    }
   }
 
   async function ensureBackgroundPermission() {
@@ -955,31 +960,7 @@ function AppInner() {
             <Text style={styles.btnPrimaryText}>{busy ? "Masuk..." : "Masuk"}</Text>
           </TouchableOpacity>
         </View>
-      <Modal visible={logoutModalOpen} animationType="fade" transparent>
-        <View style={styles.modalBg}>
-          <View style={styles.confirmCard}>
-            <View style={styles.confirmIconWrap}>
-              <Ionicons name="log-out-outline" size={28} color="#dc2626" />
-            </View>
-            <Text style={styles.confirmTitle}>Keluar dari Akun?</Text>
-            <Text style={styles.confirmSub}>
-              Pelacakan lokasi akan berhenti sementara sampai Anda masuk kembali.
-            </Text>
-            <View style={styles.confirmActions}>
-              <TouchableOpacity
-                style={styles.confirmCancelBtn}
-                onPress={() => setLogoutModalOpen(false)}
-              >
-                <Text style={styles.confirmCancelText}>Batal</Text>
-              </TouchableOpacity>
-              <TouchableOpacity style={styles.confirmOkBtn} onPress={handleLogout}>
-                <Text style={styles.confirmOkText}>Ya, Keluar</Text>
-              </TouchableOpacity>
-            </View>
-          </View>
-        </View>
-      </Modal>
-      {batteryModal}
+        {batteryModal}
       </View>
     );
   }
@@ -1067,8 +1048,16 @@ function AppInner() {
       <View style={styles.mapWrap}>
         <WebView
           ref={webRef}
-          source={{ html: MAP_HTML }}
-          onLoadEnd={() => setMapReady(true)}
+          style={{ flex: 1 }}
+          originWhitelist={["*"]}
+          javaScriptEnabled={true}
+          domStorageEnabled={true}
+          mixedContentMode="always"
+          source={{ html: MAP_HTML, baseUrl: SERVER_URL }}
+          onLoadEnd={() => {
+            setMapReady(true);
+            webRef.current?.injectJavaScript(`window.updateDevices(${JSON.stringify(devices)}); true;`);
+          }}
           onMessage={(ev) => {
             try {
               const msg = JSON.parse(ev.nativeEvent.data);
@@ -1387,73 +1376,85 @@ function AppInner() {
         </ScrollView>
       )}
 
-      <Modal visible={adminOpen} animationType="slide" transparent>
-        <View style={[styles.modalBg, { paddingTop: topInset + 16, paddingBottom: bottomInset + 16 }]}>
-          <View style={styles.modalCard}>
-            <View style={styles.devHead}>
+      <Modal visible={adminOpen} animationType="slide" onRequestClose={() => setAdminOpen(false)}>
+        <View style={[styles.fullPage, { paddingBottom: bottomInset }]}>
+          <StatusBar style="dark" backgroundColor="#ffffff" translucent />
+          <View style={[styles.header, { paddingTop: topInset + 8 }]}>
+            <View style={styles.row}>
+              <TouchableOpacity style={styles.iconBtn} onPress={() => setAdminOpen(false)}>
+                <Ionicons name="arrow-back" size={20} color="#0f172a" />
+              </TouchableOpacity>
               <Text style={styles.title}>
                 {editingUsername ? `Edit @${editingUsername}` : "Kelola User"}
               </Text>
-              <TouchableOpacity style={styles.btnSmall} onPress={() => setAdminOpen(false)}>
-                <Text style={styles.btnSmallText}>Tutup</Text>
-              </TouchableOpacity>
             </View>
+          </View>
 
-            <Text style={styles.label}>Username (huruf saja)</Text>
-            <TextInput
-              style={styles.input}
-              value={formUsername}
-              onChangeText={(t) => setFormUsername(t.toLowerCase().replace(/[^a-z]/g, ""))}
-              autoCapitalize="none"
-              autoCorrect={false}
-              placeholder="lucky"
-              placeholderTextColor="#94a3b8"
-            />
+          <ScrollView style={{ flex: 1 }} contentContainerStyle={{ padding: 14, gap: 14 }}>
+            <View style={styles.devCard}>
+              <Text style={styles.devName}>
+                {editingUsername ? `Edit Data @${editingUsername}` : "Tambah User Baru"}
+              </Text>
 
-            <Text style={styles.label}>Nama (tampil di peta &amp; notifikasi)</Text>
-            <TextInput
-              style={styles.input}
-              value={formDisplayName}
-              onChangeText={setFormDisplayName}
-              placeholder="Lucky Frediyanto"
-              placeholderTextColor="#94a3b8"
-            />
+              <Text style={styles.label}>Username (huruf saja)</Text>
+              <TextInput
+                style={styles.input}
+                value={formUsername}
+                onChangeText={(t) => setFormUsername(t.toLowerCase().replace(/[^a-z]/g, ""))}
+                autoCapitalize="none"
+                autoCorrect={false}
+                placeholder="lucky"
+                placeholderTextColor="#94a3b8"
+              />
 
-            <Text style={styles.label}>
-              {editingUsername ? "Password Baru (kosongkan jika tetap)" : "Password (bebas)"}
-            </Text>
-            <TextInput
-              style={styles.input}
-              value={formPassword}
-              onChangeText={setFormPassword}
-              secureTextEntry
-              placeholder="••••••"
-              placeholderTextColor="#94a3b8"
-            />
+              <Text style={styles.label}>Nama (tampil di peta &amp; notifikasi)</Text>
+              <TextInput
+                style={styles.input}
+                value={formDisplayName}
+                onChangeText={setFormDisplayName}
+                placeholder="Lucky Frediyanto"
+                placeholderTextColor="#94a3b8"
+              />
 
-            {editingUsername !== user.username ? (
-              <View style={[styles.row, { marginTop: 10, justifyContent: "space-between" }]}>
-                <Text style={styles.muted}>Jadikan Admin?</Text>
-                <Switch value={formRole === "admin"} onValueChange={(v) => setFormRole(v ? "admin" : "user")} />
-              </View>
-            ) : null}
+              <Text style={styles.label}>
+                {editingUsername ? "Password Baru (kosongkan jika tetap)" : "Password (bebas)"}
+              </Text>
+              <TextInput
+                style={styles.input}
+                value={formPassword}
+                onChangeText={setFormPassword}
+                secureTextEntry
+                placeholder="••••••"
+                placeholderTextColor="#94a3b8"
+              />
 
-            {adminErr ? <Text style={styles.err}>{adminErr}</Text> : null}
-
-            <View style={[styles.row, { marginTop: 12 }]}>
-              <TouchableOpacity style={[styles.btnPrimary, { flex: 1, marginTop: 0 }]} onPress={saveUserForm}>
-                <Text style={styles.btnPrimaryText}>
-                  {editingUsername ? "Simpan Perubahan" : "Tambah User"}
-                </Text>
-              </TouchableOpacity>
-              {editingUsername ? (
-                <TouchableOpacity style={styles.btnSmall} onPress={resetUserForm}>
-                  <Text style={styles.btnSmallText}>Batal</Text>
-                </TouchableOpacity>
+              {editingUsername !== user.username ? (
+                <View style={[styles.row, { marginTop: 10, justifyContent: "space-between" }]}>
+                  <Text style={styles.muted}>Jadikan Admin?</Text>
+                  <Switch value={formRole === "admin"} onValueChange={(v) => setFormRole(v ? "admin" : "user")} />
+                </View>
               ) : null}
+
+              {adminErr ? <Text style={styles.err}>{adminErr}</Text> : null}
+
+              <View style={[styles.row, { marginTop: 14 }]}>
+                <TouchableOpacity style={[styles.btnPrimary, { flex: 1, marginTop: 0 }]} onPress={saveUserForm}>
+                  <Text style={styles.btnPrimaryText}>
+                    {editingUsername ? "Simpan Perubahan" : "Tambah User"}
+                  </Text>
+                </TouchableOpacity>
+                {editingUsername ? (
+                  <TouchableOpacity style={styles.btnSmall} onPress={resetUserForm}>
+                    <Text style={styles.btnSmallText}>Batal</Text>
+                  </TouchableOpacity>
+                ) : null}
+              </View>
             </View>
 
-            <ScrollView style={{ maxHeight: 220, marginTop: 14 }}>
+            <View style={styles.devCard}>
+              <Text style={[styles.devName, { marginBottom: 6 }]}>
+                Daftar User ({usersList.length})
+              </Text>
               {usersList.map((u) => (
                 <View key={u.username} style={styles.userRow}>
                   <View style={{ flex: 1 }}>
@@ -1480,8 +1481,8 @@ function AppInner() {
                   </View>
                 </View>
               ))}
-            </ScrollView>
-          </View>
+            </View>
+          </ScrollView>
         </View>
       </Modal>
 
@@ -1505,6 +1506,31 @@ function AppInner() {
           </View>
         </View>
       </Modal>
+
+      <Modal visible={logoutModalOpen} animationType="fade" transparent>
+        <View style={styles.modalBg}>
+          <View style={styles.confirmCard}>
+            <View style={styles.confirmIconWrap}>
+              <Ionicons name="log-out-outline" size={28} color="#dc2626" />
+            </View>
+            <Text style={styles.confirmTitle}>Keluar dari Akun?</Text>
+            <Text style={styles.confirmSub}>
+              Pelacakan lokasi akan berhenti sementara sampai Anda masuk kembali.
+            </Text>
+            <View style={styles.confirmActions}>
+              <TouchableOpacity
+                style={styles.confirmCancelBtn}
+                onPress={() => setLogoutModalOpen(false)}
+              >
+                <Text style={styles.confirmCancelText}>Batal</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={styles.confirmOkBtn} onPress={handleLogout}>
+                <Text style={styles.confirmOkText}>Ya, Keluar</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
       {batteryModal}
     </View>
   );
@@ -1520,6 +1546,7 @@ export default function App() {
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: "#f8fafc" },
+  fullPage: { flex: 1, backgroundColor: "#f8fafc" },
   loadingScreen: { flex: 1, backgroundColor: "#f8fafc", justifyContent: "center", alignItems: "center" },
   center: { flex: 1, backgroundColor: "#f8fafc", justifyContent: "center", padding: 20 },
   card: {

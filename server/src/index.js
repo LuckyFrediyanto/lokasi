@@ -95,13 +95,63 @@ export class LocationHubDO extends DurableObject {
   }
 }
 
+async function handleMapTile(request, z, x, y, ctx) {
+  const zi = Number(z);
+  const xi = Number(x);
+  const yi = Number(y);
+  if (!Number.isInteger(zi) || zi < 0 || zi > 20 || !Number.isInteger(xi) || xi < 0 || !Number.isInteger(yi) || yi < 0) {
+    return new Response("Invalid tile", { status: 400 });
+  }
+  const cache = caches.default;
+  const cacheKey = new Request(request.url, { method: "GET" });
+  const hit = await cache.match(cacheKey);
+  if (hit) return hit;
+
+  const sub = (xi + yi) % 4;
+  const sources = [
+    `https://mt${sub}.google.com/vt/lyrs=m&x=${xi}&y=${yi}&z=${zi}&hl=id`,
+    `https://server.arcgisonline.com/ArcGIS/rest/services/World_Street_Map/MapServer/tile/${zi}/${yi}/${xi}`,
+  ];
+
+  for (const upstream of sources) {
+    try {
+      const res = await fetch(upstream, {
+        headers: {
+          "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+          "accept": "image/avif,image/webp,image/apng,image/*,*/*;q=0.8",
+        },
+      });
+      if (res.ok) {
+        const body = await res.arrayBuffer();
+        if (body.byteLength > 200) {
+          const out = new Response(body, {
+            status: 200,
+            headers: {
+              "content-type": res.headers.get("content-type") || "image/png",
+              "cache-control": "public, max-age=86400",
+              "access-control-allow-origin": "*",
+            },
+          });
+          ctx.waitUntil(cache.put(cacheKey, out.clone()));
+          return out;
+        }
+      }
+    } catch {}
+  }
+  return new Response("Tile unavailable", { status: 502 });
+}
+
 export default {
-  async fetch(request, env) {
+  async fetch(request, env, ctx) {
     const url = new URL(request.url);
     if (url.pathname === "/" && request.method === "GET") {
       return new Response(DASHBOARD_HTML, {
         headers: { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" },
       });
+    }
+    const tileMatch = url.pathname.match(/^\/api\/tile\/(\d+)\/(\d+)\/(\d+)\.png$/);
+    if (tileMatch && request.method === "GET") {
+      return handleMapTile(request, tileMatch[1], tileMatch[2], tileMatch[3], ctx);
     }
     const stub = env.LOCATION_HUB.getByName("main");
     return stub.fetch(request);
