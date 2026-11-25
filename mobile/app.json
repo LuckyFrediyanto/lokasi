@@ -1,0 +1,54 @@
+{
+  "expo": {
+    "name": "Lacak HP",
+    "slug": "lacak-hp",
+    "owner": "luckyfrediyanto",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.pribadi.lacakhp",
+      "infoPlist": {
+        "NSLocationWhenInUseUsageDescription": "Aplikasi membutuhkan lokasi untuk menampilkan posisi HP Anda di peta realtime.",
+        "NSLocationAlwaysAndWhenInUseUsageDescription": "Aplikasi membutuhkan lokasi latar belakang agar HP tetap terlacak saat layar mati atau aplikasi ditutup.",
+        "UIBackgroundModes": [
+          "location"
+        ]
+      }
+    },
+    "android": {
+      "package": "com.pribadi.lacakhp",
+      "permissions": [
+        "ACCESS_COARSE_LOCATION",
+        "ACCESS_FINE_LOCATION",
+        "ACCESS_BACKGROUND_LOCATION",
+        "FOREGROUND_SERVICE",
+        "FOREGROUND_SERVICE_LOCATION",
+        "WAKE_LOCK",
+        "android.permission.ACCESS_COARSE_LOCATION",
+        "android.permission.ACCESS_FINE_LOCATION",
+        "android.permission.ACCESS_BACKGROUND_LOCATION",
+        "android.permission.FOREGROUND_SERVICE",
+        "android.permission.FOREGROUND_SERVICE_LOCATION"
+      ]
+    },
+    "plugins": [
+      [
+        "expo-location",
+        {
+          "locationAlwaysAndWhenInUsePermission": "Izinkan Lacak HP mengakses lokasi selalu agar HP tetap terpantau di latar belakang.",
+          "locationWhenInUsePermission": "Izinkan Lacak HP mengakses lokasi saat aplikasi dibuka.",
+          "isIosBackgroundLocationEnabled": true,
+          "isAndroidBackgroundLocationEnabled": true,
+          "isAndroidForegroundServiceEnabled": true
+        }
+      ],
+      "expo-secure-store"
+    ],
+    "extra": {
+      "eas": {
+        "projectId": "62158200-5632-4a64-b3f2-dbd401cac35b"
+      }
+    }
+  }
+}
