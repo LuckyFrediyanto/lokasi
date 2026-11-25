@@ -35,7 +35,7 @@ export const MAP_HTML = `<!doctype html>
 <div id="map"></div>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
 <script>
-const map = L.map("map", { zoomControl: true }).setView([-6.8, 110.84], 13);
+const map = L.map("map", { zoomControl: false }).setView([-6.8, 110.84], 13);
 L.tileLayer("${SERVER_URL}/api/tile/{z}/{x}/{y}.png", {
   maxZoom: 20,
   attribution: "&copy; Maps"

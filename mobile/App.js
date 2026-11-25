@@ -214,9 +214,9 @@ function AppInner() {
   const [adminErr, setAdminErr] = useState("");
 
   const screenH = Dimensions.get("window").height;
-  const sheetMin = 76;
+  const sheetMin = 36;
   const sheetMid = Math.round(screenH * 0.42);
-  const sheetMax = Math.round(screenH - (topInset + 8));
+  const sheetMax = screenH;
   const sheetHeight = useRef(new Animated.Value(sheetMid)).current;
   const currentSheetH = useRef(sheetMid);
 
@@ -227,41 +227,44 @@ function AppInner() {
     return () => sheetHeight.removeListener(id);
   }, [sheetHeight]);
 
+  function animateSheetTo(target) {
+    const clamped = Math.max(sheetMin, Math.min(sheetMax, target));
+    currentSheetH.current = clamped;
+    Animated.spring(sheetHeight, {
+      toValue: clamped,
+      friction: 9,
+      tension: 60,
+      useNativeDriver: false,
+    }).start();
+  }
+
   const topControlsOpacity = sheetHeight.interpolate({
-    inputRange: [sheetMid, sheetMax - 30, sheetMax],
-    outputRange: [1, 0.2, 0],
+    inputRange: [sheetMid, sheetMax - 60, sheetMax],
+    outputRange: [1, 0.15, 0],
     extrapolate: "clamp",
   });
   const topControlsTranslateY = sheetHeight.interpolate({
     inputRange: [sheetMid, sheetMax],
-    outputRange: [0, -40],
+    outputRange: [0, -50],
     extrapolate: "clamp",
   });
 
   const panResponder = useRef(
     PanResponder.create({
       onStartShouldSetPanResponder: () => true,
-      onMoveShouldSetPanResponder: (_, gesture) => Math.abs(gesture.dy) > 4,
+      onMoveShouldSetPanResponder: (_, gesture) => Math.abs(gesture.dy) > 3,
       onPanResponderMove: (_, gesture) => {
         const next = Math.max(sheetMin, Math.min(sheetMax, currentSheetH.current - gesture.dy));
         sheetHeight.setValue(next);
       },
       onPanResponderRelease: (_, gesture) => {
-        let snapTo = sheetMid;
-        if (gesture.dy < -20 || gesture.vy < -0.2) {
-          snapTo = sheetMax;
-        } else if (gesture.dy > 20 || gesture.vy > 0.2) {
-          snapTo = currentSheetH.current > (sheetMid + sheetMax) / 2 ? sheetMid : sheetMin;
-        } else {
-          snapTo = currentSheetH.current > (sheetMid + sheetMax) / 2 ? sheetMax : sheetMid;
+        let finalH = currentSheetH.current - gesture.dy;
+        if (gesture.vy < -0.8 || finalH > screenH - 70) {
+          finalH = sheetMax;
+        } else if (gesture.vy > 0.8 || finalH < 70) {
+          finalH = sheetMin;
         }
-        currentSheetH.current = snapTo;
-        Animated.spring(sheetHeight, {
-          toValue: snapTo,
-          friction: 8,
-          tension: 50,
-          useNativeDriver: false,
-        }).start();
+        animateSheetTo(finalH);
       },
     })
   ).current;
@@ -658,6 +661,7 @@ function AppInner() {
     setHistoryTarget(device);
     setHistoryDays(days);
     setPanelMode("history");
+    animateSheetTo(sheetMid);
     setHistoryLoading(true);
     try {
       const data = await apiRequest(
@@ -757,6 +761,7 @@ function AppInner() {
       } catch {}
     }
     setPanelMode("places");
+    animateSheetTo(sheetMid);
   }
 
   function toggleNotifsPanel() {
@@ -771,6 +776,7 @@ function AppInner() {
     }
     setUnreadNotifs(0);
     setPanelMode("notifs");
+    animateSheetTo(sheetMid);
   }
 
   async function snapPlaceToMyGps() {
