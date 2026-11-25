@@ -178,7 +178,7 @@ function renderDeviceGroups() {
 
     if (g.items.length === 1) {
       const d = g.items[0];
-      const online = Date.now() - (d.last_seen || d.updated_at) < 45000;
+      const online = Date.now() - (d.last_seen || d.updated_at) < 5 * 60 * 1000;
       const col = d.color || "#0284c7";
       const inner = d.photo ? '<img src="' + esc(d.photo) + '" alt="" />' : USER_SVG;
       const html = '<div class="user-pin" style="background:' + esc(col) + '">' + inner + '<span class="st ' + (online ? "" : "old") + '"></span></div>';
@@ -188,7 +188,7 @@ function renderDeviceGroups() {
       clusterMarkers.push(m);
     } else {
       const itemsHtml = g.items.map((d) => {
-        const online = Date.now() - (d.last_seen || d.updated_at) < 45000;
+        const online = Date.now() - (d.last_seen || d.updated_at) < 5 * 60 * 1000;
         const col = d.color || "#0284c7";
         const inner = d.photo ? '<img src="' + esc(d.photo) + '" alt="" />' : USER_SVG;
         return '<div class="cluster-av" style="background:' + esc(col) + '">' + inner + '<span class="st ' + (online ? "" : "old") + '"></span></div>';

@@ -305,7 +305,7 @@ function renderMarkers() {
     const avgLng = g.items.reduce((s, d) => s + d.lng, 0) / g.items.length;
     if (g.items.length === 1) {
       const d = g.items[0];
-      const online = Date.now() - (d.last_seen || d.updated_at) < 45000;
+      const online = Date.now() - (d.last_seen || d.updated_at) < 5 * 60 * 1000;
       const col = d.color || "#0284c7";
       const tip = (d.display_name || d.username) + " (" + (d.platform === "ios" ? "iOS" : "Android") + ")";
       const inner = d.photo ? '<img src="' + esc(d.photo) + '" alt="" />' : svg;
@@ -318,7 +318,7 @@ function renderMarkers() {
       clusterMarkers.push(L.marker([d.lat, d.lng], { icon }).bindTooltip(esc(tip)).addTo(map));
     } else {
       const itemsHtml = g.items.map((d) => {
-        const online = Date.now() - (d.last_seen || d.updated_at) < 45000;
+        const online = Date.now() - (d.last_seen || d.updated_at) < 5 * 60 * 1000;
         const col = d.color || "#0284c7";
         const inner = d.photo ? '<img src="' + esc(d.photo) + '" alt="" />' : svg;
         return '<div class="cluster-av" style="background:' + esc(col) + '">' + inner + '<span class="st ' + (online ? "" : "off") + '"></span></div>';
@@ -401,7 +401,7 @@ function renderPanel() {
     return;
   }
   list.innerHTML = arr.map((d) => {
-    const online = Date.now() - (d.last_seen || d.updated_at) < 45000;
+    const online = Date.now() - (d.last_seen || d.updated_at) < 5 * 60 * 1000;
     const bat = d.battery != null ? Math.round(d.battery) + "%" + (d.charging ? " ⚡" : "") : "-";
     const acc = d.accuracy != null ? Math.round(d.accuracy) + "m" : "-";
     const pLabel = d.platform === "ios" ? "iOS" : "Android";

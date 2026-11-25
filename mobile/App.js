@@ -530,7 +530,7 @@ function AppInner() {
           if (ws.readyState === 1) {
             ws.send(JSON.stringify({ type: "heartbeat", device_id: myDeviceId }));
           }
-        }, 15000);
+        }, 10000);
       };
       ws.onmessage = (ev) => {
         try {
@@ -1640,7 +1640,7 @@ function AppInner() {
             </Text>
           ) : (
             devices.map((d) => {
-              const online = Date.now() - (d.last_seen || d.updated_at) < 45000;
+              const online = Date.now() - (d.last_seen || d.updated_at) < 5 * 60 * 1000;
               const bat = d.battery != null ? `${Math.round(d.battery)}%${d.charging ? " ⚡" : ""}` : "-";
               const acc = d.accuracy != null ? `${Math.round(d.accuracy)}m` : "-";
               const pLabel = d.platform === "ios" ? "iOS" : "Android";
