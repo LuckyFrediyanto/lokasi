@@ -5,3 +5,6 @@ dist/
 mobile/ios/
 mobile/android/
 *.log
+.env
+.env.*
+server/.env*
