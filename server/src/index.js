@@ -96,14 +96,25 @@ export class LocationHubDO extends DurableObject {
 }
 
 async function handleMapTile(request, z, x, y, ctx) {
-  const zi = Number(z);
-  const xi = Number(x);
-  const yi = Number(y);
-  if (!Number.isInteger(zi) || zi < 0 || zi > 20 || !Number.isInteger(xi) || xi < 0 || !Number.isInteger(yi) || yi < 0) {
+  let zi = Number(z);
+  let xi = Number(x);
+  let yi = Number(y);
+  if (!Number.isInteger(zi) || zi < 0 || !Number.isInteger(xi) || xi < 0 || !Number.isInteger(yi) || yi < 0) {
     return new Response("Invalid tile", { status: 400 });
   }
+
+  // Google tiles di beberapa wilayah Indonesia max level 18. Clamp ke 18 jika diminta di atasnya agar tidak muncul "Map data not yet available"
+  if (zi > 18) {
+    const diff = zi - 18;
+    zi = 18;
+    xi = Math.floor(xi / (1 << diff));
+    yi = Math.floor(yi / (1 << diff));
+  }
+
   const cache = caches.default;
-  const cacheKey = new Request(request.url, { method: "GET" });
+  const canonicalUrl = new URL(request.url);
+  canonicalUrl.pathname = `/api/tile/${zi}/${xi}/${yi}.png`;
+  const cacheKey = new Request(canonicalUrl.toString(), { method: "GET" });
   const hit = await cache.match(cacheKey);
   if (hit) return hit;
 
@@ -111,6 +122,7 @@ async function handleMapTile(request, z, x, y, ctx) {
   const sources = [
     `https://mt${sub}.google.com/vt/lyrs=m&x=${xi}&y=${yi}&z=${zi}&hl=id`,
     `https://server.arcgisonline.com/ArcGIS/rest/services/World_Street_Map/MapServer/tile/${zi}/${yi}/${xi}`,
+    `https://tile.openstreetmap.org/${zi}/${xi}/${yi}.png`,
   ];
 
   for (const upstream of sources) {
@@ -123,12 +135,13 @@ async function handleMapTile(request, z, x, y, ctx) {
       });
       if (res.ok) {
         const body = await res.arrayBuffer();
-        if (body.byteLength > 200) {
+        // Google tile "data not available" berukuran 2049 bytes
+        if (body.byteLength > 2200 || (body.byteLength > 200 && !upstream.includes("google.com"))) {
           const out = new Response(body, {
             status: 200,
             headers: {
               "content-type": res.headers.get("content-type") || "image/png",
-              "cache-control": "public, max-age=86400",
+              "cache-control": "public, max-age=604800, immutable",
               "access-control-allow-origin": "*",
             },
           });

@@ -25,6 +25,7 @@ import * as Updates from "expo-updates";
 import * as Notifications from "expo-notifications";
 import * as SecureStore from "expo-secure-store";
 import * as IntentLauncher from "expo-intent-launcher";
+import * as Location from "expo-location";
 import * as ImagePicker from "expo-image-picker";
 import * as ImageManipulator from "expo-image-manipulator";
 import { WebView } from "react-native-webview";
@@ -134,9 +135,7 @@ async function openBatterySettings() {
     return;
   } catch {}
   try {
-    await IntentLauncher.startActivityAsync(
-      "android.settings.IGNORE_BATTERY_OPTIMIZATION_SETTINGS"
-    );
+    await IntentLauncher.startActivityAsync("android.settings.IGNORE_BATTERY_OPTIMIZATION_SETTINGS");
     return;
   } catch {}
   Linking.openSettings().catch(() => {});
@@ -158,6 +157,37 @@ async function showLocalOsNotification(message) {
 
 function AppInner() {
   const insets = useSafeAreaInsets();
+
+  async function refreshPermissionState() {
+    const fg = await Location.getForegroundPermissionsAsync().catch(() => ({ status: "denied" }));
+    const bg = await Location.getBackgroundPermissionsAsync().catch(() => ({ status: "denied" }));
+    const notif = await Notifications.getPermissionsAsync().catch(() => ({ status: "denied" }));
+    const battery = Platform.OS !== "android" || (await SecureStore.getItemAsync(STORE_KEYS.BATTERY_OK)) === "1";
+    const next = {
+      location: fg.status === "granted",
+      background: bg.status === "granted",
+      notifications: notif.status === "granted",
+      battery,
+    };
+    setPermissionState(next);
+    return next;
+  }
+
+  async function requestRequiredPermissions() {
+    setPermissionBusy(true);
+    try {
+      await Location.requestForegroundPermissionsAsync();
+      await Location.requestBackgroundPermissionsAsync();
+      await Notifications.requestPermissionsAsync();
+      if (Platform.OS === "android") {
+        setBatteryPromptOpen(true);
+        await openBatterySettings();
+      }
+      await refreshPermissionState();
+    } finally {
+      setPermissionBusy(false);
+    }
+  }
   const topInset = Math.max(
     insets.top,
     Platform.OS === "android" ? (RNStatusBar.currentHeight || 28) : 0
@@ -206,6 +236,9 @@ function AppInner() {
   const [logoutBusy, setLogoutBusy] = useState(false);
   const [batteryPromptOpen, setBatteryPromptOpen] = useState(false);
   const [batteryOpenedOnce, setBatteryOpenedOnce] = useState(false);
+  const [permissionGateOpen, setPermissionGateOpen] = useState(false);
+  const [permissionState, setPermissionState] = useState({ location: false, background: false, notifications: false, battery: false });
+  const [permissionBusy, setPermissionBusy] = useState(false);
 
   const [adminOpen, setAdminOpen] = useState(false);
   const [usersList, setUsersList] = useState([]);
@@ -399,8 +432,12 @@ function AppInner() {
       ]);
       setMyDeviceId(devId);
       setBgActive(active);
+      const permissions = await refreshPermissionState();
       if (Platform.OS === "android" && batDone !== "1") {
         setBatteryPromptOpen(true);
+      }
+      if (!permissions.location || !permissions.background || !permissions.notifications || !permissions.battery) {
+        setPermissionGateOpen(true);
       }
       if (sess.token) {
         try {
@@ -1175,6 +1212,7 @@ function AppInner() {
       <StatusBar style="dark" backgroundColor="transparent" translucent />
 
       <View style={styles.mapWrap}>
+        <View style={styles.mapPermissionOverlay} pointerEvents={permissionGateOpen ? "auto" : "none"} />
         <WebView
           ref={webRef}
           style={{ flex: 1 }}
@@ -1874,6 +1912,52 @@ function AppInner() {
         </View>
       </Modal>
       {batteryModal}
+
+      <Modal visible={permissionGateOpen} animationType="fade" transparent>
+        <View style={styles.modalBg}>
+          <View style={styles.permissionCard}>
+            <Ionicons name="shield-checkmark" size={42} color="#0284c7" />
+            <Text style={styles.confirmTitle}>Aktifkan Izin Wajib</Text>
+            <Text style={styles.confirmSub}>
+              Aplikasi tidak dapat lanjut sebelum semua izin aktif. Setelah membuka Settings, kembali ke sini dan tekan Periksa Lagi.
+            </Text>
+            <View style={styles.permissionList}>
+              {[
+                ["location", "Lokasi saat aplikasi digunakan"],
+                ["background", "Lokasi selalu / latar belakang"],
+                ["notifications", "Notifikasi alarm dan lokasi"],
+                ["battery", "Baterai: Tidak dibatasi"],
+              ].map(([key, label]) => (
+                <View key={key} style={styles.permissionRow}>
+                  <Ionicons
+                    name={permissionState[key] ? "checkmark-circle" : "close-circle"}
+                    size={22}
+                    color={permissionState[key] ? "#16a34a" : "#dc2626"}
+                  />
+                  <Text style={styles.permissionText}>{label}</Text>
+                </View>
+              ))}
+            </View>
+            <TouchableOpacity style={styles.btnPrimary} onPress={requestRequiredPermissions} disabled={permissionBusy}>
+              <Text style={styles.btnPrimaryText}>{permissionBusy ? "Membuka Settings..." : "Aktifkan / Buka Settings"}</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[styles.btnSmall, { marginTop: 10, alignItems: "center", opacity: permissionBusy ? 0.5 : 1 }]}
+              onPress={async () => {
+                const state = await refreshPermissionState();
+                if (state.location && state.background && state.notifications && state.battery) {
+                  setPermissionGateOpen(false);
+                } else {
+                  Alert.alert("Izin Belum Lengkap", "Aktifkan semua item di atas terlebih dahulu.");
+                }
+              }}
+              disabled={permissionBusy}
+            >
+              <Text style={styles.btnSmallText}>Periksa Lagi</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
     </View>
   );
 }
@@ -1889,6 +1973,11 @@ export default function App() {
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: "#f8fafc" },
   fullPage: { flex: 1, backgroundColor: "#f8fafc" },
+  mapPermissionOverlay: { position: "absolute", inset: 0, backgroundColor: "rgba(15,23,42,0.35)", zIndex: 50 },
+  permissionCard: { backgroundColor: "#ffffff", borderRadius: 18, padding: 20, borderWidth: 1, borderColor: "#e2e8f0", width: "100%", maxWidth: 380 },
+  permissionList: { gap: 10, marginTop: 14, marginBottom: 4 },
+  permissionRow: { flexDirection: "row", alignItems: "center", gap: 9 },
+  permissionText: { flex: 1, color: "#334155", fontSize: 13, fontWeight: "600" },
   loadingScreen: { flex: 1, backgroundColor: "#f8fafc", justifyContent: "center", alignItems: "center" },
   center: { flex: 1, backgroundColor: "#f8fafc", justifyContent: "center", padding: 20 },
   card: {

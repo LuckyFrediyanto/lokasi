@@ -266,9 +266,10 @@ async function api(path, opts = {}) {
 
 function initMap() {
   if (map) return;
-  map = L.map("map").setView([-6.8, 110.84], 13);
+  map = L.map("map", { maxZoom: 20 }).setView([-6.8, 110.84], 13);
   L.tileLayer("/api/tile/{z}/{x}/{y}.png", {
     maxZoom: 20,
+    maxNativeZoom: 18,
     attribution: "&copy; Maps"
   }).addTo(map);
   map.on("zoomend", renderMarkers);
