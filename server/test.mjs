@@ -205,7 +205,14 @@ assert.equal((await res.json()).devices.length, 1);
 res = await hub.handleApi(req("/api/auth/logout", {
   method: "POST",
   token: luckyAuth.token,
-  body: { device_id: "poco" },
+  body: { device_id: "poco", password: "salah", require_password: true },
+}));
+assert.equal(res.status, 401);
+
+res = await hub.handleApi(req("/api/auth/logout", {
+  method: "POST",
+  token: luckyAuth.token,
+  body: { device_id: "poco", password: "bebas", require_password: true },
 }));
 assert.equal(res.status, 200);
 

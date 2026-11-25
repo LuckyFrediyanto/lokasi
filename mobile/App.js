@@ -200,6 +200,9 @@ function AppInner() {
   const [ringingTargets, setRingingTargets] = useState({});
   const [ringCaller, setRingCaller] = useState(null);
   const [logoutModalOpen, setLogoutModalOpen] = useState(false);
+  const [logoutPassword, setLogoutPassword] = useState("");
+  const [logoutErr, setLogoutErr] = useState("");
+  const [logoutBusy, setLogoutBusy] = useState(false);
   const [batteryPromptOpen, setBatteryPromptOpen] = useState(false);
   const [batteryOpenedOnce, setBatteryOpenedOnce] = useState(false);
 
@@ -218,7 +221,7 @@ function AppInner() {
   const sheetQuarter = Math.round(screenH * 0.25);
   const sheetMid = Math.round(screenH * 0.50);
   const sheetThreeQuarter = Math.round(screenH * 0.75);
-  const sheetMax = Math.round(screenH - (topInset + 24));
+  const sheetMax = screenH;
   const sheetSnapPoints = [sheetMin, sheetQuarter, sheetMid, sheetThreeQuarter, sheetMax];
 
   const sheetHeight = useRef(new Animated.Value(sheetMid)).current;
@@ -247,12 +250,22 @@ function AppInner() {
 
   const topControlsOpacity = sheetHeight.interpolate({
     inputRange: [sheetThreeQuarter, sheetMax - 40, sheetMax],
-    outputRange: [1, 0.2, 0],
+    outputRange: [1, 0.15, 0],
     extrapolate: "clamp",
   });
   const topControlsTranslateY = sheetHeight.interpolate({
     inputRange: [sheetThreeQuarter, sheetMax],
-    outputRange: [0, -45],
+    outputRange: [0, -50],
+    extrapolate: "clamp",
+  });
+  const sheetTopRadius = sheetHeight.interpolate({
+    inputRange: [sheetMax - 40, sheetMax],
+    outputRange: [22, 0],
+    extrapolate: "clamp",
+  });
+  const sheetHandlePaddingTop = sheetHeight.interpolate({
+    inputRange: [sheetMax - 50, sheetMax],
+    outputRange: [11, topInset + 10],
     extrapolate: "clamp",
   });
   const backdropOpacity = sheetHeight.interpolate({
@@ -625,41 +638,59 @@ function AppInner() {
   }
 
   function confirmLogout() {
+    setLogoutPassword("");
+    setLogoutErr("");
     setLogoutModalOpen(true);
   }
 
-  function handleLogout() {
-    const oldToken = token;
-    const oldDevId = myDeviceId;
-    setLogoutModalOpen(false);
-    setAdminOpen(false);
-    setRingCaller(null);
-    setBgActive(false);
-    setPanelMode("devices");
-    setHistoryTarget(null);
-    setHistoryData(null);
-    setToken(null);
-    setUser(null);
-    setDevices([]);
-    setPlaces([]);
-    setNotifications([]);
-    if (wsRef.current) {
-      try { wsRef.current.close(); } catch {}
-      wsRef.current = null;
+  async function handleLogout() {
+    const pw = logoutPassword;
+    if (!pw) {
+      setLogoutErr("Password wajib diisi untuk keluar");
+      return;
     }
-    if (watchSubRef.current) {
-      try { watchSubRef.current.remove(); } catch {}
-      watchSubRef.current = null;
-    }
-    clearSession().catch(() => {});
-    stopLoudRing().catch(() => {});
-    stopBackgroundTracking().catch(() => {});
-    if (oldToken) {
-      apiRequest("/api/auth/logout", {
-        method: "POST",
-        token: oldToken,
-        body: { device_id: oldDevId },
-      }).catch(() => {});
+    setLogoutErr("");
+    setLogoutBusy(true);
+    try {
+      if (token) {
+        await apiRequest("/api/auth/logout", {
+          method: "POST",
+          token,
+          body: {
+            device_id: myDeviceId,
+            password: pw,
+            require_password: true,
+          },
+        });
+      }
+      setLogoutModalOpen(false);
+      setLogoutPassword("");
+      setAdminOpen(false);
+      setRingCaller(null);
+      setBgActive(false);
+      setPanelMode("devices");
+      setHistoryTarget(null);
+      setHistoryData(null);
+      setToken(null);
+      setUser(null);
+      setDevices([]);
+      setPlaces([]);
+      setNotifications([]);
+      if (wsRef.current) {
+        try { wsRef.current.close(); } catch {}
+        wsRef.current = null;
+      }
+      if (watchSubRef.current) {
+        try { watchSubRef.current.remove(); } catch {}
+        watchSubRef.current = null;
+      }
+      clearSession().catch(() => {});
+      stopLoudRing().catch(() => {});
+      stopBackgroundTracking().catch(() => {});
+    } catch (e) {
+      setLogoutErr(e.message || "Password salah");
+    } finally {
+      setLogoutBusy(false);
     }
   }
 
@@ -1257,10 +1288,22 @@ function AppInner() {
         />
       </Animated.View>
 
-      <Animated.View style={[styles.bottomSheet, { height: sheetHeight }]}>
-        <View {...panResponder.panHandlers} style={styles.sheetHandleArea}>
+      <Animated.View
+        style={[
+          styles.bottomSheet,
+          {
+            height: sheetHeight,
+            borderTopLeftRadius: sheetTopRadius,
+            borderTopRightRadius: sheetTopRadius,
+          },
+        ]}
+      >
+        <Animated.View
+          {...panResponder.panHandlers}
+          style={[styles.sheetHandleArea, { paddingTop: sheetHandlePaddingTop }]}
+        >
           <View style={styles.sheetHandle} />
-        </View>
+        </Animated.View>
 
       {panelMode === "places" ? (
         <ScrollView style={styles.list} contentContainerStyle={{ padding: 12, gap: 8 }}>
@@ -1769,19 +1812,39 @@ function AppInner() {
             <View style={styles.confirmIconWrap}>
               <Ionicons name="log-out-outline" size={28} color="#dc2626" />
             </View>
-            <Text style={styles.confirmTitle}>Keluar dari Akun?</Text>
+            <Text style={styles.confirmTitle}>Konfirmasi Keluar</Text>
             <Text style={styles.confirmSub}>
-              Pelacakan lokasi akan berhenti sementara sampai Anda masuk kembali.
+              Masukkan password akun @{user.username} untuk keluar dari aplikasi.
             </Text>
+            <TextInput
+              style={[styles.input, { width: "100%", marginTop: 12 }]}
+              value={logoutPassword}
+              onChangeText={(t) => {
+                setLogoutPassword(t);
+                if (logoutErr) setLogoutErr("");
+              }}
+              secureTextEntry
+              placeholder="Password akun"
+              placeholderTextColor="#94a3b8"
+              editable={!logoutBusy}
+            />
+            {logoutErr ? <Text style={[styles.err, { alignSelf: "flex-start" }]}>{logoutErr}</Text> : null}
             <View style={styles.confirmActions}>
               <TouchableOpacity
                 style={styles.confirmCancelBtn}
+                disabled={logoutBusy}
                 onPress={() => setLogoutModalOpen(false)}
               >
                 <Text style={styles.confirmCancelText}>Batal</Text>
               </TouchableOpacity>
-              <TouchableOpacity style={styles.confirmOkBtn} onPress={handleLogout}>
-                <Text style={styles.confirmOkText}>Ya, Keluar</Text>
+              <TouchableOpacity
+                style={styles.confirmOkBtn}
+                disabled={logoutBusy}
+                onPress={handleLogout}
+              >
+                <Text style={styles.confirmOkText}>
+                  {logoutBusy ? "Memeriksa..." : "Ya, Keluar"}
+                </Text>
               </TouchableOpacity>
             </View>
           </View>

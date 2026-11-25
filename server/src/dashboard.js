@@ -115,8 +115,10 @@ export const DASHBOARD_HTML = `<!doctype html>
     <div style="width:48px;height:48px;border-radius:50%;background:#fee2e2;color:#dc2626;display:inline-flex;align-items:center;justify-content:center;margin-bottom:10px">
       <svg style="width:24px;height:24px;fill:currentColor" viewBox="0 0 24 24"><path d="M17 7l-1.41 1.41L18.17 11H8v2h10.17l-2.58 2.58L17 17l5-5zM4 5h8V3H4c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h8v-2H4V5z"/></svg>
     </div>
-    <div style="font-size:17px;font-weight:700;margin-bottom:6px">Keluar dari Akun?</div>
-    <div class="meta" style="margin-bottom:16px">Anda perlu masuk lagi untuk memantau lokasi perangkat.</div>
+    <div style="font-size:17px;font-weight:700;margin-bottom:6px">Konfirmasi Keluar</div>
+    <div class="meta" style="margin-bottom:12px">Masukkan password akun Anda untuk keluar.</div>
+    <input id="logoutPass" type="password" placeholder="Password akun" style="margin-bottom:6px" />
+    <div class="err" id="logoutErr" style="margin-bottom:10px"></div>
     <div style="display:flex;gap:8px">
       <button class="sec" style="flex:1;padding:10px" id="cancelLogoutBtn" type="button">Batal</button>
       <button class="danger" style="flex:1;padding:10px" id="confirmLogoutBtn" type="button">Ya, Keluar</button>
@@ -482,18 +484,31 @@ document.getElementById("loginForm").onsubmit = async (e) => {
 };
 
 document.getElementById("logoutBtn").onclick = () => {
+  document.getElementById("logoutPass").value = "";
+  document.getElementById("logoutErr").textContent = "";
   document.getElementById("logoutModal").classList.remove("hidden");
 };
 document.getElementById("cancelLogoutBtn").onclick = () => {
   document.getElementById("logoutModal").classList.add("hidden");
 };
 document.getElementById("confirmLogoutBtn").onclick = async () => {
-  document.getElementById("logoutModal").classList.add("hidden");
-  try { await api("/api/auth/logout", { method: "POST" }); } catch {}
-  token = "";
-  localStorage.removeItem(LS_TOKEN);
-  if (ws) ws.close();
-  location.reload();
+  const errEl = document.getElementById("logoutErr");
+  const pw = document.getElementById("logoutPass").value;
+  errEl.textContent = "";
+  if (!pw) {
+    errEl.textContent = "Password wajib diisi";
+    return;
+  }
+  try {
+    await api("/api/auth/logout", { method: "POST", body: JSON.stringify({ password: pw, require_password: true }) });
+    document.getElementById("logoutModal").classList.add("hidden");
+    token = "";
+    localStorage.removeItem(LS_TOKEN);
+    if (ws) ws.close();
+    location.reload();
+  } catch (ex) {
+    errEl.textContent = ex.message || "Password salah";
+  }
 };
 
 document.getElementById("notifBtn").onclick = () => {

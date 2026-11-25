@@ -1102,6 +1102,17 @@ export class LocationHubCore {
 
     if (path === "/api/auth/logout" && request.method === "POST") {
       const body = (await this.readJson(request)) || {};
+      if (typeof body.password === "string") {
+        const uRow = this.sql.exec(
+          "SELECT password_hash FROM users WHERE username = ?",
+          user.username
+        ).toArray()[0];
+        if (!uRow || !(await verifyPassword(body.password, uRow.password_hash))) {
+          return json({ error: "Password salah" }, 401);
+        }
+      } else if (body.require_password === true) {
+        return json({ error: "Password wajib diisi untuk keluar" }, 400);
+      }
       const removedIds = new Set();
       const bySession = this.sql.exec(
         "SELECT device_id FROM locations WHERE session_token = ?",
