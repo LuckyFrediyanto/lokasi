@@ -58,10 +58,12 @@
         "android.permission.POST_NOTIFICATIONS",
         "android.permission.VIBRATE",
         "android.permission.MODIFY_AUDIO_SETTINGS",
-        "android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS"
+        "android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS",
+        "android.permission.FOREGROUND_SERVICE_DATA_SYNC"
       ]
     },
     "plugins": [
+      "./plugins/withPersistentLocationService",
       [
         "expo-location",
         {
