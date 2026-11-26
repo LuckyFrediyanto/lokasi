@@ -833,19 +833,34 @@ export class LocationHubCore {
     return `${lat.toFixed(5)}, ${lng.toFixed(5)}`;
   }
 
-  async buildTravelHistory(deviceId, days = 1) {
+  async buildTravelHistory(deviceId, daysOrRange = 1) {
     const now = Date.now();
-    this.sql.exec("DELETE FROM location_history WHERE recorded_at < ?", now - HISTORY_MAX_AGE_MS);
-    const clampedDays = Math.min(HISTORY_MAX_DAYS, Math.max(1, Number(days) || 1));
-    const since = now - clampedDays * 24 * 60 * 60 * 1000;
+    const minAllowed = now - HISTORY_MAX_AGE_MS;
+    this.sql.exec("DELETE FROM location_history WHERE recorded_at < ?", minAllowed);
+
+    let since;
+    let until = now;
+    let clampedDays = 1;
+    if (daysOrRange && typeof daysOrRange === "object" && Number.isFinite(daysOrRange.start) && Number.isFinite(daysOrRange.end)) {
+      since = Math.max(minAllowed, Math.min(now, Math.floor(daysOrRange.start)));
+      until = Math.max(since, Math.min(now, Math.floor(daysOrRange.end)));
+      clampedDays = Math.min(HISTORY_MAX_DAYS, Math.max(1, Math.ceil((until - since) / 86400000)));
+    } else {
+      const daysVal = typeof daysOrRange === "object" ? daysOrRange?.days : daysOrRange;
+      clampedDays = Math.min(HISTORY_MAX_DAYS, Math.max(1, Number(daysVal) || 1));
+      since = now - clampedDays * 24 * 60 * 60 * 1000;
+    }
+
     const rawRows = this.sql.exec(
       `SELECT lat, lng, accuracy, battery, recorded_at
        FROM location_history
        WHERE device_id = ?
          AND recorded_at >= ?
+         AND recorded_at <= ?
        ORDER BY recorded_at ASC`,
       deviceId,
-      since
+      since,
+      until
     ).toArray();
 
     const hasAccurate = rawRows.some((r) => r.accuracy == null || Number(r.accuracy) <= MAX_TRUSTED_ACCURACY_M);
@@ -870,7 +885,7 @@ export class LocationHubCore {
     }
 
     if (!points.length) {
-      return { device_id: deviceId, days: clampedDays, total_distance_km: 0, points: [], route_points: [], segments: [] };
+      return { device_id: deviceId, days: clampedDays, start_at: since, end_at: until, total_distance_km: 0, points: [], route_points: [], segments: [] };
     }
 
     const places = this.listPlaces();
@@ -1019,6 +1034,8 @@ export class LocationHubCore {
     return {
       device_id: deviceId,
       days: clampedDays,
+      start_at: since,
+      end_at: until,
       total_distance_km: Number(totalKm.toFixed(2)),
       points: routePoints.length ? routePoints : [{ lat: points[points.length - 1].lat, lng: points[points.length - 1].lng }],
       segments,
@@ -1237,8 +1254,13 @@ export class LocationHubCore {
     const historyMatch = path.match(/^\/api\/locations\/([^/]+)\/history$/);
     if (historyMatch && request.method === "GET") {
       const deviceId = decodeURIComponent(historyMatch[1]);
-      const days = Number(url.searchParams.get("days") || 1);
-      const history = await this.buildTravelHistory(deviceId, days);
+      const startParam = url.searchParams.get("start");
+      const endParam = url.searchParams.get("end");
+      const startNum = startParam !== null ? Number(startParam) : NaN;
+      const endNum = endParam !== null ? Number(endParam) : NaN;
+      const history = Number.isFinite(startNum) && Number.isFinite(endNum)
+        ? await this.buildTravelHistory(deviceId, { start: startNum, end: endNum })
+        : await this.buildTravelHistory(deviceId, Number(url.searchParams.get("days") || 1));
       return json(history);
     }
 

@@ -373,24 +373,76 @@ function removeDevice(deviceId) {
   renderPanel();
 }
 
+function isoLocalDate(d) {
+  return d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0") + "-" + String(d.getDate()).padStart(2, "0");
+}
+
+function drawWebHistory(data, selectedTripIdx) {
+  historyLayers.forEach((l) => map.removeLayer(l));
+  historyLayers = [];
+  const latlngs = (data && data.points || []).map((p) => [p.lat, p.lng]);
+  const segs = (data && data.segments) || [];
+  const selectedSeg = selectedTripIdx !== null && segs[selectedTripIdx] && segs[selectedTripIdx].type === "trip" ? segs[selectedTripIdx] : null;
+  if (latlngs.length >= 2) {
+    if (selectedSeg) {
+      historyLayers.push(
+        L.polyline(latlngs, { color: "#64748b", weight: 7, opacity: 0.45 }).addTo(map),
+        L.polyline(latlngs, { color: "#94a3b8", weight: 4, opacity: 0.78 }).addTo(map)
+      );
+    } else {
+      historyLayers.push(
+        L.polyline(latlngs, { color: "#14532d", weight: 9, opacity: 0.75 }).addTo(map),
+        L.polyline(latlngs, { color: "#22c55e", weight: 5, opacity: 0.98 }).addTo(map)
+      );
+    }
+  }
+  if (selectedSeg && Array.isArray(selectedSeg.points) && selectedSeg.points.length >= 2) {
+    const hl = L.polyline(selectedSeg.points, { color: "#22c55e", weight: 6, opacity: 1 }).addTo(map);
+    historyLayers.push(
+      L.polyline(selectedSeg.points, { color: "#14532d", weight: 10, opacity: 0.85 }).addTo(map),
+      hl
+    );
+    map.fitBounds(hl.getBounds(), { padding: [44, 44] });
+  } else if (latlngs.length >= 2) {
+    map.fitBounds(latlngs, { padding: [36, 36] });
+  } else if (latlngs.length === 1) {
+    map.setView(latlngs[0], 16);
+  }
+}
+
 function renderPanel() {
   const list = document.getElementById("deviceList");
   updateNotifBadge();
 
   if (panelMode === "history" && historyState) {
-    const segs = historyState.data.segments || [];
+    const today = new Date();
+    const minD = new Date(today.getFullYear(), today.getMonth(), today.getDate() - 29);
+    const minStr = isoLocalDate(minD);
+    const maxStr = isoLocalDate(today);
+    const segs = (historyState.data && historyState.data.segments) || [];
     const header = '<div class="dev"><div class="dev-top"><span class="dev-name">History · ' + esc(historyState.label) + '</span>' +
       '<button class="sec" type="button" onclick="closeHistory()">Tutup</button></div>' +
-      '<div class="meta">Total perjalanan: <strong>' + historyState.data.total_distance_km + ' km</strong></div>' +
+      '<div class="meta">Total perjalanan: <strong>' + (historyState.loading ? "..." : (historyState.data ? historyState.data.total_distance_km : 0) + " km") + '</strong> (maks 30 hari)</div>' +
+      '<div style="display:flex;gap:6px;align-items:center;margin-top:8px">' +
+      '<input id="histStart" type="date" min="' + minStr + '" max="' + maxStr + '" value="' + esc(historyState.startStr) + '" style="flex:1;padding:6px 8px;font-size:12px" />' +
+      '<span class="meta" style="margin:0">–</span>' +
+      '<input id="histEnd" type="date" min="' + minStr + '" max="' + maxStr + '" value="' + esc(historyState.endStr) + '" style="flex:1;padding:6px 8px;font-size:12px" />' +
+      '<button class="green" type="button" onclick="applyHistoryDateRange()">Terapkan</button>' +
+      '</div>' +
       '<div class="dev-btns">' +
-      [1, 3, 7, 14, 30].map((d) => '<button type="button" class="' + (historyState.days === d ? "green" : "sec") + '" onclick="openHistory(\\'' + esc(historyState.id) + '\\',' + d + ',\\'' + esc(historyState.label) + '\\')">' + (d === 1 ? "24 Jam" : d + " Hari") + '</button>').join("") +
+      [1, 7, 30].map((d) => '<button type="button" class="' + (historyState.quickDays === d ? "green" : "sec") + '" onclick="openHistory(\\'' + esc(historyState.id) + '\\',' + d + ',\\'' + esc(historyState.label) + '\\')">' + (d === 1 ? "Hari Ini" : d + " Hari") + '</button>').join("") +
       '</div></div>';
-    const body = !segs.length
-      ? '<div class="meta">Belum ada rekaman perjalanan.</div>'
-      : segs.map((s) => s.type === "stay"
-        ? '<div class="dev" style="cursor:pointer" onclick="map.setView([' + s.lat + ',' + s.lng + '],17)"><div class="dev-top"><span class="dev-name">' + esc(s.label) + '</span><span class="badge">SINGGAH</span></div><div class="meta">' + timeRangeText(s.start_at, s.end_at) + " · " + durText(s.duration_min) + '</div></div>'
-        : '<div class="dev" style="border-color:#22c55e;background:#f0fdf4;cursor:pointer" onclick="map.setView([' + s.end_lat + ',' + s.end_lng + '],16)"><div class="dev-top"><span class="dev-name" style="color:#15803d">Jalan · ' + s.distance_km + ' km</span><span class="badge android">' + durText(s.duration_min) + '</span></div><div class="meta">' + timeRangeText(s.start_at, s.end_at) + '<br>Dari: ' + esc(s.from_label) + '<br>Ke: ' + esc(s.to_label) + '</div></div>'
-      ).join("");
+    const body = historyState.loading
+      ? '<div style="display:flex;flex-direction:column;align-items:center;justify-content:center;padding:40px 12px;text-align:center;color:var(--muted);font-size:13px">Memuat riwayat perjalanan...</div>'
+      : !segs.length
+        ? '<div class="meta" style="text-align:center;padding:24px 0">Belum ada rekaman perjalanan pada rentang tanggal ini.</div>'
+        : segs.map((s, idx) => {
+            const activeTrip = historyState.selectedIdx === idx && s.type === "trip";
+            if (s.type === "stay") {
+              return '<div class="dev" style="cursor:pointer" onclick="selectHistorySeg(' + idx + ')"><div class="dev-top"><span class="dev-name">' + esc(s.label) + '</span><span class="badge">SINGGAH</span></div><div class="meta">' + timeRangeText(s.start_at, s.end_at) + " · " + durText(s.duration_min) + '</div></div>';
+            }
+            return '<div class="dev" style="border-color:' + (activeTrip ? "#16a34a" : "#86efac") + ';border-width:' + (activeTrip ? "2px" : "1px") + ';background:' + (activeTrip ? "#dcfce7" : "#f0fdf4") + ';cursor:pointer" onclick="selectHistorySeg(' + idx + ')"><div class="dev-top"><span class="dev-name" style="color:#15803d">Jalan · ' + s.distance_km + ' km</span><span class="badge android">' + durText(s.duration_min) + '</span></div><div class="meta">' + timeRangeText(s.start_at, s.end_at) + '<br>Dari: ' + esc(s.from_label) + '<br>Ke: ' + esc(s.to_label) + '</div></div>';
+          }).join("");
     list.innerHTML = header + body;
     return;
   }
@@ -464,21 +516,67 @@ window.closeHistory = () => {
   panelMode = "devices";
   renderPanel();
 };
+window.selectHistorySeg = (idx) => {
+  if (!historyState || !historyState.data) return;
+  const seg = (historyState.data.segments || [])[idx];
+  if (!seg) return;
+  if (seg.type === "trip") {
+    historyState.selectedIdx = historyState.selectedIdx === idx ? null : idx;
+    drawWebHistory(historyState.data, historyState.selectedIdx);
+  } else {
+    historyState.selectedIdx = null;
+    drawWebHistory(historyState.data, null);
+    map.setView([seg.lat, seg.lng], 17);
+  }
+  renderPanel();
+};
+window.applyHistoryDateRange = async () => {
+  if (!historyState) return;
+  const sVal = document.getElementById("histStart").value;
+  const eVal = document.getElementById("histEnd").value;
+  if (!sVal || !eVal) return;
+  const [sy, sm, sd] = sVal.split("-").map(Number);
+  const [ey, em, ed] = eVal.split("-").map(Number);
+  let startMs = new Date(sy, sm - 1, sd, 0, 0, 0, 0).getTime();
+  let endMs = new Date(ey, em - 1, ed, 23, 59, 59, 999).getTime();
+  if (endMs < startMs) {
+    const tmp = startMs; startMs = endMs - 86399999; endMs = tmp + 86399999;
+  }
+  historyState.startStr = isoLocalDate(new Date(startMs));
+  historyState.endStr = isoLocalDate(new Date(endMs));
+  historyState.quickDays = null;
+  historyState.selectedIdx = null;
+  historyState.loading = true;
+  renderPanel();
+  const data = await api("/api/locations/" + encodeURIComponent(historyState.id) + "/history?start=" + startMs + "&end=" + endMs);
+  historyState.data = data;
+  historyState.loading = false;
+  drawWebHistory(data, null);
+  renderPanel();
+};
 window.openHistory = async (id, days = 1, label = "") => {
   historyLayers.forEach((l) => map.removeLayer(l));
   historyLayers = [];
   const d = devices.get(id);
-  const data = await api("/api/locations/" + encodeURIComponent(id) + "/history?days=" + days);
-  historyState = { id, days, label: label || (d ? (d.display_name || d.username) : id), data };
+  const now = new Date();
+  const startDate = new Date(now.getFullYear(), now.getMonth(), now.getDate() - (days - 1), 0, 0, 0, 0);
+  const endDate = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59, 999);
+  historyState = {
+    id,
+    quickDays: days,
+    startStr: isoLocalDate(startDate),
+    endStr: isoLocalDate(endDate),
+    label: label || (d ? (d.display_name || d.username) : id),
+    data: null,
+    selectedIdx: null,
+    loading: true
+  };
   panelMode = "history";
-  const latlngs = (data.points || []).map((p) => [p.lat, p.lng]);
-  if (latlngs.length >= 2) {
-    historyLayers.push(
-      L.polyline(latlngs, { color: "#14532d", weight: 9, opacity: 0.75 }).addTo(map),
-      L.polyline(latlngs, { color: "#22c55e", weight: 5, opacity: 0.98 }).addTo(map)
-    );
-    map.fitBounds(latlngs, { padding: [36, 36] });
-  }
+  renderPanel();
+  const data = await api("/api/locations/" + encodeURIComponent(id) + "/history?start=" + startDate.getTime() + "&end=" + endDate.getTime());
+  historyState.data = data;
+  historyState.loading = false;
+  drawWebHistory(data, null);
   renderPanel();
 };
 window.pingDev = async (id) => {

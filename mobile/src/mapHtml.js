@@ -67,7 +67,9 @@ setTimeout(() => map.invalidateSize(), 700);
 let currentDevices = [];
 let clusterMarkers = [];
 let historyLayers = [];
-let highlightLayer = null;
+let highlightLayers = [];
+let lastHistoryPoints = [];
+let lastHistorySegments = [];
 let didAutoCenter = false;
 let pickActive = false;
 let pickMarker = null;
@@ -228,16 +230,27 @@ window.focusDevice = function(lat, lng) {
   map.setView([lat, lng], 18, { animate: true });
 };
 
-window.setHistoryRoute = function(points, segments) {
+function clearHistoryMap() {
   historyLayers.forEach((l) => map.removeLayer(l));
   historyLayers = [];
-  if (highlightLayer) { map.removeLayer(highlightLayer); highlightLayer = null; }
-  if (!points || !points.length) return;
+  highlightLayers.forEach((l) => map.removeLayer(l));
+  highlightLayers = [];
+}
+
+function drawBaseHistory(points, segments, muted) {
+  clearHistoryMap();
+  if (!points || !points.length) return [];
   const latlngs = points.map((p) => [p.lat, p.lng]);
   if (latlngs.length >= 2) {
-    const border = L.polyline(latlngs, { color: "#14532d", weight: 9, opacity: 0.75, lineJoin: "round", lineCap: "round" }).addTo(map);
-    const greenLine = L.polyline(latlngs, { color: "#22c55e", weight: 5, opacity: 0.98, lineJoin: "round", lineCap: "round" }).addTo(map);
-    historyLayers.push(border, greenLine);
+    if (muted) {
+      const grayBorder = L.polyline(latlngs, { color: "#64748b", weight: 7, opacity: 0.45, lineJoin: "round", lineCap: "round" }).addTo(map);
+      const grayLine = L.polyline(latlngs, { color: "#94a3b8", weight: 4, opacity: 0.78, lineJoin: "round", lineCap: "round" }).addTo(map);
+      historyLayers.push(grayBorder, grayLine);
+    } else {
+      const border = L.polyline(latlngs, { color: "#14532d", weight: 9, opacity: 0.75, lineJoin: "round", lineCap: "round" }).addTo(map);
+      const greenLine = L.polyline(latlngs, { color: "#22c55e", weight: 5, opacity: 0.98, lineJoin: "round", lineCap: "round" }).addTo(map);
+      historyLayers.push(border, greenLine);
+    }
   }
   const stays = (segments || []).filter((s) => s.type === "stay");
   stays.forEach((s, idx) => {
@@ -250,6 +263,14 @@ window.setHistoryRoute = function(points, segments) {
     }).addTo(map);
     historyLayers.push(m);
   });
+  return latlngs;
+}
+
+window.setHistoryRoute = function(points, segments) {
+  lastHistoryPoints = points || [];
+  lastHistorySegments = segments || [];
+  const latlngs = drawBaseHistory(lastHistoryPoints, lastHistorySegments, false);
+  if (!latlngs.length) return;
   if (latlngs.length === 1) {
     map.setView(latlngs[0], 16);
   } else {
@@ -257,12 +278,24 @@ window.setHistoryRoute = function(points, segments) {
   }
 };
 
+window.resetHistoryHighlight = function() {
+  const latlngs = drawBaseHistory(lastHistoryPoints, lastHistorySegments, false);
+  if (latlngs.length >= 2) {
+    map.fitBounds(latlngs, { padding: [36, 36] });
+  } else if (latlngs.length === 1) {
+    map.setView(latlngs[0], 16);
+  }
+};
+
 window.highlightSegment = function(lat, lng, tripPoints) {
-  if (highlightLayer) { map.removeLayer(highlightLayer); highlightLayer = null; }
   if (Array.isArray(tripPoints) && tripPoints.length >= 2) {
-    highlightLayer = L.polyline(tripPoints, { color: "#86efac", weight: 7, opacity: 1 }).addTo(map);
-    map.fitBounds(highlightLayer.getBounds(), { padding: [40, 40] });
+    drawBaseHistory(lastHistoryPoints, lastHistorySegments, true);
+    const border = L.polyline(tripPoints, { color: "#14532d", weight: 10, opacity: 0.85, lineJoin: "round", lineCap: "round" }).addTo(map);
+    const greenLine = L.polyline(tripPoints, { color: "#22c55e", weight: 6, opacity: 1, lineJoin: "round", lineCap: "round" }).addTo(map);
+    highlightLayers.push(border, greenLine);
+    map.fitBounds(greenLine.getBounds(), { padding: [44, 44] });
   } else if (typeof lat === "number" && typeof lng === "number") {
+    drawBaseHistory(lastHistoryPoints, lastHistorySegments, false);
     map.setView([lat, lng], 17, { animate: true });
   }
 };

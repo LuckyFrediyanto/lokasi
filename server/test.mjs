@@ -421,4 +421,11 @@ const retained20d = hub.sql.exec(
 ).toArray()[0].n;
 assert.equal(Number(retained20d), 1);
 
+res = await hub.handleApi(req(`/api/locations/lucky%3Ahp2/history?start=${nowMs - 22 * 86400000}&end=${nowMs - 18 * 86400000}`, {
+  token: luckyRelogin.token,
+}));
+assert.equal(res.status, 200);
+const histRange = await res.json();
+assert.equal(histRange.points.length, 1);
+
 console.log("ALL_V4_TESTS_PASSED");

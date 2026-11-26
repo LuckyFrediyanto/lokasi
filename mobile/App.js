@@ -71,6 +71,38 @@ function formatAgo(ts) {
 }
 
 const MONTHS_ID = ["Jan", "Feb", "Mar", "Apr", "Mei", "Jun", "Jul", "Agu", "Sep", "Okt", "Nov", "Des"];
+const FULL_MONTHS_ID = [
+  "Januari", "Februari", "Maret", "April", "Mei", "Juni",
+  "Juli", "Agustus", "September", "Oktober", "November", "Desember",
+];
+const WEEKDAYS_ID = ["Min", "Sen", "Sel", "Rab", "Kam", "Jum", "Sab"];
+
+function startOfDayMs(dateObj) {
+  return new Date(dateObj.getFullYear(), dateObj.getMonth(), dateObj.getDate(), 0, 0, 0, 0).getTime();
+}
+
+function endOfDayMs(dateObj) {
+  return new Date(dateObj.getFullYear(), dateObj.getMonth(), dateObj.getDate(), 23, 59, 59, 999).getTime();
+}
+
+function getAllowedHistoryDayBounds() {
+  const now = new Date();
+  const todayStart = startOfDayMs(now);
+  const minDayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 29, 0, 0, 0, 0).getTime();
+  return { todayStart, minDayStart };
+}
+
+function buildCalendarGrid(year, month) {
+  const firstDow = new Date(year, month, 1).getDay();
+  const daysInMonth = new Date(year, month + 1, 0).getDate();
+  const cells = [];
+  for (let i = 0; i < firstDow; i++) cells.push(null);
+  for (let d = 1; d <= daysInMonth; d++) {
+    cells.push(new Date(year, month, d));
+  }
+  while (cells.length % 7 !== 0) cells.push(null);
+  return cells;
+}
 
 function formatClock(ts) {
   const d = new Date(ts);
@@ -233,9 +265,20 @@ function AppInner() {
 
   const [panelMode, setPanelMode] = useState("devices");
   const [historyTarget, setHistoryTarget] = useState(null);
-  const [historyDays, setHistoryDays] = useState(1);
+  const [historyRange, setHistoryRange] = useState(() => {
+    const now = new Date();
+    return { startMs: startOfDayMs(now), endMs: endOfDayMs(now), quickDays: 1 };
+  });
   const [historyData, setHistoryData] = useState(null);
   const [historyLoading, setHistoryLoading] = useState(false);
+  const [selectedHistoryIdx, setSelectedHistoryIdx] = useState(null);
+  const [calendarOpen, setCalendarOpen] = useState(false);
+  const [calMonth, setCalMonth] = useState(() => {
+    const now = new Date();
+    return { year: now.getFullYear(), month: now.getMonth() };
+  });
+  const [draftStartMs, setDraftStartMs] = useState(null);
+  const [draftEndMs, setDraftEndMs] = useState(null);
   const [mapReady, setMapReady] = useState(false);
   const [tick, setTick] = useState(0);
 
@@ -794,15 +837,26 @@ function AppInner() {
     }
   }
 
-  async function openHistory(device, days = 1) {
+  async function openHistory(device, daysOrRange = 1) {
+    let range;
+    if (typeof daysOrRange === "object" && daysOrRange && Number.isFinite(daysOrRange.startMs) && Number.isFinite(daysOrRange.endMs)) {
+      range = { startMs: daysOrRange.startMs, endMs: daysOrRange.endMs, quickDays: daysOrRange.quickDays || null };
+    } else {
+      const days = Math.min(30, Math.max(1, Number(daysOrRange) || 1));
+      const now = new Date();
+      const s = new Date(now.getFullYear(), now.getMonth(), now.getDate() - (days - 1), 0, 0, 0, 0).getTime();
+      const e = endOfDayMs(now);
+      range = { startMs: s, endMs: e, quickDays: days };
+    }
     setHistoryTarget(device);
-    setHistoryDays(days);
+    setHistoryRange(range);
+    setSelectedHistoryIdx(null);
     setPanelMode("history");
     animateSheetTo(sheetMid);
     setHistoryLoading(true);
     try {
       const data = await apiRequest(
-        `/api/locations/${encodeURIComponent(device.device_id)}/history?days=${days}`,
+        `/api/locations/${encodeURIComponent(device.device_id)}/history?start=${range.startMs}&end=${range.endMs}`,
         { token }
       );
       setHistoryData(data);
@@ -816,20 +870,69 @@ function AppInner() {
     }
   }
 
+  function openHistoryCalendar() {
+    const endD = new Date(historyRange.endMs || Date.now());
+    setCalMonth({ year: endD.getFullYear(), month: endD.getMonth() });
+    setDraftStartMs(startOfDayMs(new Date(historyRange.startMs || Date.now())));
+    setDraftEndMs(startOfDayMs(endD));
+    setCalendarOpen(true);
+  }
+
+  function handleCalendarDayPress(dayDate) {
+    const ms = startOfDayMs(dayDate);
+    if (draftStartMs === null || (draftStartMs !== null && draftEndMs !== null && draftStartMs !== draftEndMs)) {
+      setDraftStartMs(ms);
+      setDraftEndMs(null);
+    } else if (ms < draftStartMs) {
+      setDraftEndMs(draftStartMs);
+      setDraftStartMs(ms);
+    } else {
+      setDraftEndMs(ms);
+    }
+  }
+
+  function applyCalendarRange() {
+    if (!historyTarget || draftStartMs === null) return;
+    const endDay = draftEndMs !== null ? draftEndMs : draftStartMs;
+    const startMs = startOfDayMs(new Date(draftStartMs));
+    const endMs = endOfDayMs(new Date(endDay));
+    setCalendarOpen(false);
+    openHistory(historyTarget, { startMs, endMs, quickDays: null });
+  }
+
+  function shiftCalendarMonth(delta) {
+    const { todayStart, minDayStart } = getAllowedHistoryDayBounds();
+    const minD = new Date(minDayStart);
+    const maxD = new Date(todayStart);
+    const minMonthIdx = minD.getFullYear() * 12 + minD.getMonth();
+    const maxMonthIdx = maxD.getFullYear() * 12 + maxD.getMonth();
+    const nextIdx = calMonth.year * 12 + calMonth.month + delta;
+    if (nextIdx < minMonthIdx || nextIdx > maxMonthIdx) return;
+    setCalMonth({ year: Math.floor(nextIdx / 12), month: nextIdx % 12 });
+  }
+
   function closeHistory() {
     setHistoryTarget(null);
     setHistoryData(null);
+    setSelectedHistoryIdx(null);
     setPanelMode("devices");
     webRef.current?.injectJavaScript("window.setHistoryRoute([], []); true;");
   }
 
-  function focusHistorySegment(seg) {
+  function focusHistorySegment(seg, idx) {
     if (!webRef.current) return;
     if (seg.type === "trip" && Array.isArray(seg.points)) {
-      webRef.current.injectJavaScript(
-        `window.highlightSegment(null, null, ${JSON.stringify(seg.points)}); true;`
-      );
+      if (selectedHistoryIdx === idx) {
+        setSelectedHistoryIdx(null);
+        webRef.current.injectJavaScript("window.resetHistoryHighlight(); true;");
+      } else {
+        setSelectedHistoryIdx(idx);
+        webRef.current.injectJavaScript(
+          `window.highlightSegment(null, null, ${JSON.stringify(seg.points)}); true;`
+        );
+      }
     } else if (typeof seg.lat === "number" && typeof seg.lng === "number") {
+      setSelectedHistoryIdx(null);
       webRef.current.injectJavaScript(`window.highlightSegment(${seg.lat}, ${seg.lng}, null); true;`);
     }
   }
@@ -1566,43 +1669,78 @@ function AppInner() {
                   History · {historyTarget.display_name || historyTarget.username}
                 </Text>
                 <Text style={styles.devMeta}>
-                  Total perjalanan: {historyData ? `${historyData.total_distance_km} km` : "..."} (maks 30 hari)
+                  Total perjalanan: {historyLoading ? "..." : historyData ? `${historyData.total_distance_km} km` : "0 km"} (maks 30 hari)
                 </Text>
               </View>
               <TouchableOpacity style={styles.btnSmall} onPress={closeHistory}>
                 <Text style={styles.btnSmallText}>Tutup</Text>
               </TouchableOpacity>
             </View>
+            <TouchableOpacity style={styles.dateRangeBtn} onPress={openHistoryCalendar}>
+              <Ionicons name="calendar-outline" size={16} color="#15803d" />
+              <Text style={styles.dateRangeText}>
+                {formatDateLabel(historyRange.startMs) === formatDateLabel(historyRange.endMs)
+                  ? formatDateLabel(historyRange.startMs)
+                  : `${formatDateLabel(historyRange.startMs)} – ${formatDateLabel(historyRange.endMs)}`}
+              </Text>
+              <Text style={styles.dateRangeAction}>Pilih Tanggal</Text>
+            </TouchableOpacity>
             <View style={styles.devActions}>
-              {[1, 3, 7, 14, 30].map((d) => (
+              {[1, 7, 30].map((d) => (
                 <TouchableOpacity
                   key={d}
-                  style={historyDays === d ? styles.chipGreen : styles.chip}
+                  style={historyRange.quickDays === d ? styles.chipGreen : styles.chip}
                   onPress={() => openHistory(historyTarget, d)}
                 >
-                  <Text style={historyDays === d ? styles.chipPrimaryText : styles.chipText}>
-                    {d === 1 ? "24 Jam" : `${d} Hari`}
+                  <Text style={historyRange.quickDays === d ? styles.chipPrimaryText : styles.chipText}>
+                    {d === 1 ? "Hari Ini" : `${d} Hari`}
                   </Text>
                 </TouchableOpacity>
               ))}
+              {selectedHistoryIdx !== null ? (
+                <TouchableOpacity
+                  style={styles.chip}
+                  onPress={() => {
+                    setSelectedHistoryIdx(null);
+                    webRef.current?.injectJavaScript("window.resetHistoryHighlight(); true;");
+                  }}
+                >
+                  <Text style={styles.chipText}>Semua Jalur</Text>
+                </TouchableOpacity>
+              ) : null}
             </View>
           </View>
 
           {historyLoading ? (
-            <Text style={styles.muted}>Memuat riwayat perjalanan...</Text>
+            <View style={styles.historyLoadingBox}>
+              <ActivityIndicator size="large" color="#16a34a" />
+              <Text style={[styles.muted, { marginTop: 10, textAlign: "center" }]}>
+                Memuat riwayat perjalanan...
+              </Text>
+            </View>
           ) : !historyData || !historyData.segments || historyData.segments.length === 0 ? (
-            <Text style={styles.muted}>Belum ada rekaman perjalanan pada rentang waktu ini.</Text>
+            <View style={styles.historyLoadingBox}>
+              <Text style={[styles.muted, { textAlign: "center" }]}>
+                Belum ada rekaman perjalanan pada rentang tanggal ini.
+              </Text>
+            </View>
           ) : (
             historyData.segments.map((seg, idx) => {
               const segCoord = seg.type === "stay"
                 ? { lat: seg.lat, lng: seg.lng }
                 : { lat: seg.end_lat, lng: seg.end_lng };
               const tile = osmMiniTile(segCoord.lat, segCoord.lng, 16);
+              const isSelectedTrip = seg.type === "trip" && selectedHistoryIdx === idx;
               return (
                 <TouchableOpacity
                   key={`${seg.type}-${seg.start_at}-${idx}`}
-                  style={[styles.devCard, seg.type === "trip" && styles.tripCard, { flexDirection: "row", gap: 10, alignItems: "center" }]}
-                  onPress={() => focusHistorySegment(seg)}
+                  style={[
+                    styles.devCard,
+                    seg.type === "trip" && styles.tripCard,
+                    isSelectedTrip && styles.tripCardSelected,
+                    { flexDirection: "row", gap: 10, alignItems: "center" },
+                  ]}
+                  onPress={() => focusHistorySegment(seg, idx)}
                 >
                   <View style={styles.miniMapBox}>
                     <Image source={{ uri: tile.url }} style={styles.miniMapImg} />
@@ -1981,6 +2119,125 @@ function AppInner() {
           </View>
         </View>
       </Modal>
+
+      <Modal visible={calendarOpen} animationType="fade" transparent statusBarTranslucent>
+        <View style={styles.modalBg}>
+          <View style={styles.permissionModalContent}>
+            <View style={styles.calendarCard}>
+              <View style={styles.devHead}>
+                <Text style={styles.title}>Pilih Rentang Tanggal</Text>
+                <TouchableOpacity style={styles.btnSmall} onPress={() => setCalendarOpen(false)}>
+                  <Text style={styles.btnSmallText}>Tutup</Text>
+                </TouchableOpacity>
+              </View>
+              <Text style={styles.devMeta}>
+                Maksimal 30 hari terakhir. Tanggal lebih dari 30 hari tidak dapat dipilih.
+              </Text>
+
+              {(() => {
+                const { todayStart, minDayStart } = getAllowedHistoryDayBounds();
+                const minD = new Date(minDayStart);
+                const maxD = new Date(todayStart);
+                const curIdx = calMonth.year * 12 + calMonth.month;
+                const canPrev = curIdx > minD.getFullYear() * 12 + minD.getMonth();
+                const canNext = curIdx < maxD.getFullYear() * 12 + maxD.getMonth();
+                const cells = buildCalendarGrid(calMonth.year, calMonth.month);
+                const selStart = draftStartMs;
+                const selEnd = draftEndMs !== null ? draftEndMs : draftStartMs;
+
+                return (
+                  <>
+                    <View style={styles.calNav}>
+                      <TouchableOpacity
+                        style={[styles.calNavBtn, !canPrev && { opacity: 0.3 }]}
+                        disabled={!canPrev}
+                        onPress={() => shiftCalendarMonth(-1)}
+                      >
+                        <Ionicons name="chevron-back" size={18} color="#0f172a" />
+                      </TouchableOpacity>
+                      <Text style={styles.calMonthTitle}>
+                        {FULL_MONTHS_ID[calMonth.month]} {calMonth.year}
+                      </Text>
+                      <TouchableOpacity
+                        style={[styles.calNavBtn, !canNext && { opacity: 0.3 }]}
+                        disabled={!canNext}
+                        onPress={() => shiftCalendarMonth(1)}
+                      >
+                        <Ionicons name="chevron-forward" size={18} color="#0f172a" />
+                      </TouchableOpacity>
+                    </View>
+
+                    <View style={styles.calRow}>
+                      {WEEKDAYS_ID.map((w) => (
+                        <Text key={w} style={styles.calWeekday}>{w}</Text>
+                      ))}
+                    </View>
+
+                    <View style={styles.calGrid}>
+                      {cells.map((cellDate, idx) => {
+                        if (!cellDate) {
+                          return <View key={`empty-${idx}`} style={styles.calCell} />;
+                        }
+                        const ms = startOfDayMs(cellDate);
+                        const disabled = ms < minDayStart || ms > todayStart;
+                        const isEdge = !disabled && (ms === selStart || ms === selEnd);
+                        const isInRange = !disabled && selStart !== null && selEnd !== null && ms > selStart && ms < selEnd;
+                        return (
+                          <TouchableOpacity
+                            key={ms}
+                            disabled={disabled}
+                            onPress={() => handleCalendarDayPress(cellDate)}
+                            style={[
+                              styles.calCell,
+                              isInRange && styles.calCellInRange,
+                              isEdge && styles.calCellSelected,
+                            ]}
+                          >
+                            <Text
+                              style={[
+                                styles.calCellText,
+                                disabled && styles.calCellDisabledText,
+                                isInRange && styles.calCellInRangeText,
+                                isEdge && styles.calCellSelectedText,
+                              ]}
+                            >
+                              {cellDate.getDate()}
+                            </Text>
+                          </TouchableOpacity>
+                        );
+                      })}
+                    </View>
+
+                    <Text style={[styles.devMeta, { textAlign: "center", marginTop: 8 }]}>
+                      {selStart !== null
+                        ? selStart === selEnd
+                          ? `Dipilih: ${formatDateLabel(selStart)}`
+                          : `Dipilih: ${formatDateLabel(selStart)} – ${formatDateLabel(selEnd)}`
+                        : "Ketuk tanggal awal & akhir"}
+                    </Text>
+
+                    <View style={[styles.row, { marginTop: 12 }]}>
+                      <TouchableOpacity
+                        style={[styles.confirmCancelBtn, { flex: 1 }]}
+                        onPress={() => setCalendarOpen(false)}
+                      >
+                        <Text style={styles.confirmCancelText}>Batal</Text>
+                      </TouchableOpacity>
+                      <TouchableOpacity
+                        style={[styles.btnPrimary, { flex: 1, marginTop: 0, backgroundColor: "#16a34a" }]}
+                        disabled={selStart === null}
+                        onPress={applyCalendarRange}
+                      >
+                        <Text style={styles.btnPrimaryText}>Terapkan</Text>
+                      </TouchableOpacity>
+                    </View>
+                  </>
+                );
+              })()}
+            </View>
+          </View>
+        </View>
+      </Modal>
     </View>
   );
 }
@@ -2248,7 +2505,46 @@ const styles = StyleSheet.create({
   chipPrimaryText: { color: "#ffffff", fontSize: 12, fontWeight: "700" },
   chip: { backgroundColor: "#f1f5f9", borderWidth: 1, borderColor: "#e2e8f0", paddingHorizontal: 10, paddingVertical: 6, borderRadius: 8 },
   chipText: { color: "#0f172a", fontSize: 12, fontWeight: "600" },
-  tripCard: { borderColor: "#22c55e", backgroundColor: "#f0fdf4" },
+  tripCard: { borderColor: "#86efac", backgroundColor: "#f0fdf4" },
+  tripCardSelected: { borderColor: "#16a34a", borderWidth: 2, backgroundColor: "#dcfce7" },
+  historyLoadingBox: { minHeight: 160, justifyContent: "center", alignItems: "center", paddingHorizontal: 16 },
+  dateRangeBtn: {
+    marginTop: 10,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    backgroundColor: "#f0fdf4",
+    borderWidth: 1,
+    borderColor: "#86efac",
+    borderRadius: 10,
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+  },
+  dateRangeText: { flex: 1, color: "#0f172a", fontSize: 12, fontWeight: "700" },
+  dateRangeAction: { color: "#15803d", fontSize: 12, fontWeight: "700" },
+  calendarCard: {
+    alignSelf: "center",
+    backgroundColor: "#ffffff",
+    borderRadius: 18,
+    padding: 16,
+    borderWidth: 1,
+    borderColor: "#e2e8f0",
+    width: "94%",
+    maxWidth: 400,
+  },
+  calNav: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginTop: 12, marginBottom: 8 },
+  calNavBtn: { width: 34, height: 34, borderRadius: 10, backgroundColor: "#f1f5f9", alignItems: "center", justifyContent: "center" },
+  calMonthTitle: { color: "#0f172a", fontSize: 15, fontWeight: "700" },
+  calRow: { flexDirection: "row", marginBottom: 4 },
+  calWeekday: { width: "14.285%", textAlign: "center", color: "#64748b", fontSize: 11, fontWeight: "700" },
+  calGrid: { flexDirection: "row", flexWrap: "wrap" },
+  calCell: { width: "14.285%", height: 38, alignItems: "center", justifyContent: "center", borderRadius: 8, marginVertical: 1 },
+  calCellInRange: { backgroundColor: "#dcfce7", borderRadius: 0 },
+  calCellSelected: { backgroundColor: "#16a34a", borderRadius: 10 },
+  calCellText: { color: "#0f172a", fontSize: 13, fontWeight: "600" },
+  calCellDisabledText: { color: "#cbd5e1" },
+  calCellInRangeText: { color: "#14532d", fontWeight: "700" },
+  calCellSelectedText: { color: "#ffffff", fontWeight: "700" },
   tripTitle: { color: "#15803d", fontSize: 14, fontWeight: "700" },
   tripRoute: { color: "#1e293b", fontSize: 12, marginTop: 2 },
   badgeStay: { backgroundColor: "#0284c7", paddingHorizontal: 8, paddingVertical: 2, borderRadius: 999 },
