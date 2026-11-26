@@ -210,9 +210,27 @@ function ago(ts) {
   return Math.floor(hr / 24) + "h lalu";
 }
 
+const MONTHS_ID = ["Jan", "Feb", "Mar", "Apr", "Mei", "Jun", "Jul", "Agu", "Sep", "Okt", "Nov", "Des"];
+
 function clock(ts) {
   const d = new Date(ts);
   return String(d.getHours()).padStart(2, "0") + ":" + String(d.getMinutes()).padStart(2, "0");
+}
+
+function dateLabel(ts) {
+  const d = new Date(ts);
+  return d.getDate() + " " + MONTHS_ID[d.getMonth()] + " " + d.getFullYear();
+}
+
+function dateTimeText(ts) {
+  return dateLabel(ts) + ", " + clock(ts);
+}
+
+function timeRangeText(startTs, endTs) {
+  const d1 = dateLabel(startTs);
+  const d2 = dateLabel(endTs);
+  if (d1 === d2) return d1 + " · " + clock(startTs) + " – " + clock(endTs);
+  return d1 + " " + clock(startTs) + " – " + d2 + " " + clock(endTs);
 }
 
 function durText(m) {
@@ -365,13 +383,13 @@ function renderPanel() {
       '<button class="sec" type="button" onclick="closeHistory()">Tutup</button></div>' +
       '<div class="meta">Total perjalanan: <strong>' + historyState.data.total_distance_km + ' km</strong></div>' +
       '<div class="dev-btns">' +
-      [1, 3, 7].map((d) => '<button type="button" class="' + (historyState.days === d ? "green" : "sec") + '" onclick="openHistory(\\'' + esc(historyState.id) + '\\',' + d + ',\\'' + esc(historyState.label) + '\\')">' + (d === 1 ? "24 Jam" : d + " Hari") + '</button>').join("") +
+      [1, 3, 7, 14, 30].map((d) => '<button type="button" class="' + (historyState.days === d ? "green" : "sec") + '" onclick="openHistory(\\'' + esc(historyState.id) + '\\',' + d + ',\\'' + esc(historyState.label) + '\\')">' + (d === 1 ? "24 Jam" : d + " Hari") + '</button>').join("") +
       '</div></div>';
     const body = !segs.length
       ? '<div class="meta">Belum ada rekaman perjalanan.</div>'
       : segs.map((s) => s.type === "stay"
-        ? '<div class="dev" style="cursor:pointer" onclick="map.setView([' + s.lat + ',' + s.lng + '],17)"><div class="dev-top"><span class="dev-name">' + esc(s.label) + '</span><span class="badge">SINGGAH</span></div><div class="meta">' + clock(s.start_at) + " – " + clock(s.end_at) + " · " + durText(s.duration_min) + '</div></div>'
-        : '<div class="dev" style="border-color:#22c55e;background:#f0fdf4;cursor:pointer" onclick="map.setView([' + s.end_lat + ',' + s.end_lng + '],16)"><div class="dev-top"><span class="dev-name" style="color:#15803d">Jalan · ' + s.distance_km + ' km</span><span class="badge android">' + durText(s.duration_min) + '</span></div><div class="meta">' + clock(s.start_at) + " – " + clock(s.end_at) + '<br>Dari: ' + esc(s.from_label) + '<br>Ke: ' + esc(s.to_label) + '</div></div>'
+        ? '<div class="dev" style="cursor:pointer" onclick="map.setView([' + s.lat + ',' + s.lng + '],17)"><div class="dev-top"><span class="dev-name">' + esc(s.label) + '</span><span class="badge">SINGGAH</span></div><div class="meta">' + timeRangeText(s.start_at, s.end_at) + " · " + durText(s.duration_min) + '</div></div>'
+        : '<div class="dev" style="border-color:#22c55e;background:#f0fdf4;cursor:pointer" onclick="map.setView([' + s.end_lat + ',' + s.end_lng + '],16)"><div class="dev-top"><span class="dev-name" style="color:#15803d">Jalan · ' + s.distance_km + ' km</span><span class="badge android">' + durText(s.duration_min) + '</span></div><div class="meta">' + timeRangeText(s.start_at, s.end_at) + '<br>Dari: ' + esc(s.from_label) + '<br>Ke: ' + esc(s.to_label) + '</div></div>'
       ).join("");
     list.innerHTML = header + body;
     return;
@@ -389,7 +407,7 @@ function renderPanel() {
             : '<div class="mini-map"></div>';
           return '<div class="dev notif-card" onclick="openHistory(\\'' + esc(n.device_id) + '\\',1,\\'' + esc(n.display_name || n.username) + '\\')">' +
             preview +
-            '<div><div class="dev-name">' + esc(n.message) + '</div><div class="meta">' + ago(n.created_at) + ' · Lihat rute →</div></div></div>';
+            '<div><div class="dev-name">' + esc(n.message) + '</div><div class="meta">' + dateTimeText(n.created_at) + ' (' + ago(n.created_at) + ') · Lihat rute →</div></div></div>';
         }).join("");
     list.innerHTML = header + body;
     return;

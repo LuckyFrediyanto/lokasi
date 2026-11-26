@@ -395,4 +395,30 @@ assert.equal(res.status, 200);
 const restoredHist = await res.json();
 assert.ok(restoredHist.points.length > 0);
 
+const nowMs = Date.now();
+hub.sql.exec(
+  `INSERT INTO location_history (device_id, username, lat, lng, accuracy, battery, recorded_at) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+  "lucky:hp2", "lucky", -6.83, 110.87, 10, 80, nowMs - 31 * 86400000
+);
+hub.sql.exec(
+  `INSERT INTO location_history (device_id, username, lat, lng, accuracy, battery, recorded_at) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+  "lucky:hp2", "lucky", -6.84, 110.88, 10, 80, nowMs - 20 * 86400000
+);
+res = await hub.handleApi(req("/api/locations/lucky%3Ahp2/history?days=30", {
+  token: luckyRelogin.token,
+}));
+assert.equal(res.status, 200);
+const hist30 = await res.json();
+assert.equal(hist30.days, 30);
+const remainingOld = hub.sql.exec(
+  "SELECT COUNT(*) AS n FROM location_history WHERE recorded_at < ?",
+  nowMs - 30 * 86400000
+).toArray()[0].n;
+assert.equal(Number(remainingOld), 0);
+const retained20d = hub.sql.exec(
+  "SELECT COUNT(*) AS n FROM location_history WHERE device_id = 'lucky:hp2' AND recorded_at < ?",
+  nowMs - 15 * 86400000
+).toArray()[0].n;
+assert.equal(Number(retained20d), 1);
+
 console.log("ALL_V4_TESTS_PASSED");

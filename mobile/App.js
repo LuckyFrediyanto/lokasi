@@ -70,11 +70,29 @@ function formatAgo(ts) {
   return `${Math.floor(hr / 24)}h lalu`;
 }
 
+const MONTHS_ID = ["Jan", "Feb", "Mar", "Apr", "Mei", "Jun", "Jul", "Agu", "Sep", "Okt", "Nov", "Des"];
+
 function formatClock(ts) {
   const d = new Date(ts);
   const hh = String(d.getHours()).padStart(2, "0");
   const mm = String(d.getMinutes()).padStart(2, "0");
   return `${hh}:${mm}`;
+}
+
+function formatDateLabel(ts) {
+  const d = new Date(ts);
+  return `${d.getDate()} ${MONTHS_ID[d.getMonth()]} ${d.getFullYear()}`;
+}
+
+function formatDateTime(ts) {
+  return `${formatDateLabel(ts)}, ${formatClock(ts)}`;
+}
+
+function formatTimeRange(startTs, endTs) {
+  const d1 = formatDateLabel(startTs);
+  const d2 = formatDateLabel(endTs);
+  if (d1 === d2) return `${d1} · ${formatClock(startTs)} – ${formatClock(endTs)}`;
+  return `${d1} ${formatClock(startTs)} – ${d2} ${formatClock(endTs)}`;
 }
 
 function formatDuration(mins) {
@@ -1530,8 +1548,9 @@ function AppInner() {
                   <View style={{ flex: 1 }}>
                     <Text style={styles.devName}>{n.message}</Text>
                     <Text style={styles.devMeta}>
-                      {formatAgo(n.created_at)} · Lihat rute perjalanan →
+                      {formatDateTime(n.created_at)} ({formatAgo(n.created_at)})
                     </Text>
+                    <Text style={styles.devMeta}>Lihat rute perjalanan →</Text>
                   </View>
                 </TouchableOpacity>
               );
@@ -1547,7 +1566,7 @@ function AppInner() {
                   History · {historyTarget.display_name || historyTarget.username}
                 </Text>
                 <Text style={styles.devMeta}>
-                  Total perjalanan: {historyData ? `${historyData.total_distance_km} km` : "..."}
+                  Total perjalanan: {historyData ? `${historyData.total_distance_km} km` : "..."} (maks 30 hari)
                 </Text>
               </View>
               <TouchableOpacity style={styles.btnSmall} onPress={closeHistory}>
@@ -1555,7 +1574,7 @@ function AppInner() {
               </TouchableOpacity>
             </View>
             <View style={styles.devActions}>
-              {[1, 3, 7].map((d) => (
+              {[1, 3, 7, 14, 30].map((d) => (
                 <TouchableOpacity
                   key={d}
                   style={historyDays === d ? styles.chipGreen : styles.chip}
@@ -1608,7 +1627,7 @@ function AppInner() {
                           </View>
                         </View>
                         <Text style={styles.devMeta}>
-                          {formatClock(seg.start_at)} – {formatClock(seg.end_at)} · {formatDuration(seg.duration_min)}
+                          {formatTimeRange(seg.start_at, seg.end_at)} · {formatDuration(seg.duration_min)}
                         </Text>
                       </>
                     ) : (
@@ -1622,7 +1641,7 @@ function AppInner() {
                           </View>
                         </View>
                         <Text style={styles.devMeta}>
-                          {formatClock(seg.start_at)} – {formatClock(seg.end_at)}
+                          {formatTimeRange(seg.start_at, seg.end_at)}
                         </Text>
                         <Text style={styles.tripRoute}>Dari: {seg.from_label}</Text>
                         <Text style={styles.tripRoute}>Ke: {seg.to_label}</Text>

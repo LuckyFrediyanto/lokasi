@@ -1,12 +1,14 @@
 const SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000;
-const HISTORY_LIMIT = 2000;
-const HISTORY_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
+const HISTORY_MAX_DAYS = 30;
+const HISTORY_LIMIT = 15000;
+const HISTORY_MAX_AGE_MS = HISTORY_MAX_DAYS * 24 * 60 * 60 * 1000;
 const STAY_RADIUS_M = 100;
 const STAY_MIN_MS = 3 * 60 * 1000;
 const TRIP_MIN_DISTANCE_M = 150;
 const TRIP_MIN_EXCURSION_M = 100;
 const MAX_TRUSTED_ACCURACY_M = 80;
-const NOTIF_LIMIT = 50;
+const NOTIF_LIMIT = 200;
+const NOTIF_MAX_AGE_MS = HISTORY_MAX_AGE_MS;
 const ONLINE_WINDOW_MS = 60 * 1000;
 const PBKDF2_ITERATIONS = 100000;
 const USERNAME_RE = /^[a-z]{2,32}$/;
@@ -421,6 +423,8 @@ export class LocationHubCore {
         this.removeDevicesBySession(tok);
       }
     }
+    this.sql.exec("DELETE FROM location_history WHERE recorded_at < ?", now - HISTORY_MAX_AGE_MS);
+    this.sql.exec("DELETE FROM notifications WHERE created_at < ?", now - NOTIF_MAX_AGE_MS);
   }
 
   removeDevicesBySession(token) {
@@ -476,6 +480,8 @@ export class LocationHubCore {
   }
 
   listNotifications() {
+    const now = Date.now();
+    this.sql.exec("DELETE FROM notifications WHERE created_at < ?", now - NOTIF_MAX_AGE_MS);
     const rows = this.sql.exec(
       `SELECT n.id, n.event_type, n.device_id, n.username, n.display_name, u.photo, n.platform,
               n.place_id, n.place_name,
@@ -492,7 +498,7 @@ export class LocationHubCore {
        )
        ORDER BY n.created_at DESC
        LIMIT ?`,
-      Date.now(),
+      now,
       NOTIF_LIMIT
     ).toArray();
     return rows.map((r) => ({
@@ -707,7 +713,7 @@ export class LocationHubCore {
     const battery = optionalFinite(body.battery, 0, 100);
     const charging = body.charging === true ? 1 : body.charging === false ? 0 : null;
     const now = Date.now();
-    const updatedAt = finiteNumber(body.timestamp, now - 7 * 86400000, now + 60000) || now;
+    const updatedAt = finiteNumber(body.timestamp, now - HISTORY_MAX_AGE_MS, now + 60000) || now;
 
     this.sql.exec(
       `INSERT INTO locations (
@@ -750,12 +756,16 @@ export class LocationHubCore {
         deviceId, user.username, lat, lng, accuracy, battery, updatedAt
       );
       this.sql.exec(
+        `DELETE FROM location_history WHERE recorded_at < ?`,
+        now - HISTORY_MAX_AGE_MS
+      );
+      this.sql.exec(
         `DELETE FROM location_history
          WHERE device_id = ?
-           AND (recorded_at < ? OR id NOT IN (
+           AND id NOT IN (
              SELECT id FROM location_history WHERE device_id = ? ORDER BY recorded_at DESC LIMIT ?
-           ))`,
-        deviceId, now - HISTORY_MAX_AGE_MS, deviceId, HISTORY_LIMIT
+           )`,
+        deviceId, deviceId, HISTORY_LIMIT
       );
     }
 
@@ -824,8 +834,10 @@ export class LocationHubCore {
   }
 
   async buildTravelHistory(deviceId, days = 1) {
-    const clampedDays = Math.min(7, Math.max(1, Number(days) || 1));
-    const since = Date.now() - clampedDays * 24 * 60 * 60 * 1000;
+    const now = Date.now();
+    this.sql.exec("DELETE FROM location_history WHERE recorded_at < ?", now - HISTORY_MAX_AGE_MS);
+    const clampedDays = Math.min(HISTORY_MAX_DAYS, Math.max(1, Number(days) || 1));
+    const since = now - clampedDays * 24 * 60 * 60 * 1000;
     const rawRows = this.sql.exec(
       `SELECT lat, lng, accuracy, battery, recorded_at
        FROM location_history
